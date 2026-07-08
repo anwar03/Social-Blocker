@@ -1,0 +1,15 @@
+{
+  "_comment": "Example WHITELIST for a focus session — ONLY these sites stay reachable while a whitelist focus session is active. Everything in the bundled site-universe is blocked. Edit this list (or use the GUI/CLI) to match what your deep work actually needs.",
+  "allow": [
+    "google.com",
+    "docs.google.com",
+    "drive.google.com",
+    "github.com",
+    "stackoverflow.com",
+    "developer.mozilla.org",
+    "wikipedia.org",
+    "python.org",
+    "chatgpt.com",
+    "claude.ai"
+  ]
+}

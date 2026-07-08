@@ -1,0 +1,20 @@
+{
+  "_comment": "The 'distraction universe' used by WHITELIST focus mode. In whitelist mode the engine blocks every domain in this list EXCEPT the ones on your allow-list. /etc/hosts cannot express 'block everything except X', so we approximate a true whitelist by blocking this curated set of common time-sinks. It is not exhaustive — that is an honest limitation of the hosts-file approach (see README). Extend it freely.",
+  "domains": [
+    "facebook.com", "instagram.com", "twitter.com", "x.com", "threads.net",
+    "snapchat.com", "tiktok.com", "linkedin.com", "pinterest.com", "tumblr.com",
+    "mastodon.social", "bsky.app", "vk.com", "weibo.com",
+    "youtube.com", "netflix.com", "twitch.tv", "hulu.com", "disneyplus.com",
+    "primevideo.com", "hotstar.com", "dailymotion.com", "vimeo.com",
+    "reddit.com", "9gag.com", "quora.com", "imgur.com", "4chan.org",
+    "buzzfeed.com", "boredpanda.com", "ladbible.com",
+    "cnn.com", "bbc.com", "foxnews.com", "nytimes.com", "theguardian.com",
+    "dailymail.co.uk", "news.google.com", "news.ycombinator.com",
+    "amazon.com", "ebay.com", "aliexpress.com", "etsy.com", "daraz.com.bd",
+    "flipkart.com", "walmart.com", "temu.com", "shein.com",
+    "espn.com", "cricbuzz.com", "goal.com", "nba.com",
+    "steampowered.com", "epicgames.com", "roblox.com", "ign.com",
+    "spotify.com", "soundcloud.com",
+    "medium.com", "discord.com", "whatsapp.com", "telegram.org", "messenger.com"
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "_comment": "Default BLACKLIST — the core distractions blocked all day in blacklist mode. Each entry is a base domain; www and mobile variants are added automatically by the engine.",
+  "categories": {
+    "social": [
+      "facebook.com",
+      "instagram.com",
+      "twitter.com",
+      "x.com",
+      "threads.net",
+      "snapchat.com",
+      "tiktok.com",
+      "linkedin.com",
+      "pinterest.com"
+    ],
+    "video": [
+      "youtube.com",
+      "netflix.com",
+      "twitch.tv"
+    ],
+    "forums": [
+      "reddit.com",
+      "9gag.com",
+      "quora.com"
+    ],
+    "news_doomscroll": [
+      "news.google.com",
+      "buzzfeed.com"
+    ]
+  }
+}

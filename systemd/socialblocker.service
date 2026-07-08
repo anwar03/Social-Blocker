@@ -1,0 +1,14 @@
+[Unit]
+Description=SocialBlocker enforcement daemon
+After=network.target
+
+[Service]
+Type=simple
+# Adjust WorkingDirectory/ExecStart if you install somewhere other than /opt.
+WorkingDirectory=/opt/socialblocker
+ExecStart=/usr/bin/python3 -m socialblocker daemon --interval 5
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

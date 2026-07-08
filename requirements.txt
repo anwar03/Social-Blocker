@@ -1,0 +1,7 @@
+# SocialBlocker uses only the Python standard library — no pip packages.
+# The GUI needs Tkinter (a system package). You do NOT need to install it by
+# hand: ./install.sh detects your package manager and installs it for you.
+# If you want to do it manually anyway:
+#   Debian/Ubuntu:  sudo apt install python3-tk
+#   Fedora:         sudo dnf install python3-tkinter
+#   Arch:           sudo pacman -S tk
