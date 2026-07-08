@@ -1,9 +1,25 @@
 # SocialBlocker
 
-A Linux desktop focus blocker built around one idea from the design discussion:
-**the whitelist-vs-blacklist debate matters less than whether you can *stop*
-your blocker on impulse.** So SocialBlocker gives you both modes *and* a locked
-mode that can't be switched off mid-session.
+> A Linux desktop focus blocker with blacklist, whitelist, and locked focus
+> sessions you can't quit on impulse.
+
+![platform](https://img.shields.io/badge/platform-Linux-blue)
+![python](https://img.shields.io/badge/python-3.9%2B-green)
+![deps](https://img.shields.io/badge/dependencies-stdlib%20only-brightgreen)
+![license](https://img.shields.io/badge/license-MIT-lightgrey)
+
+SocialBlocker is built on one insight: **the whitelist-vs-blacklist debate
+matters less than whether you can *stop* your blocker on impulse.** So it gives
+you both modes *and* a locked mode that can't be switched off mid-session.
+
+## Features
+
+- 🚫 **Blacklist** — block a handful of core distractions all day, rest of the web open.
+- 🎯 **Whitelist** — during focus sessions, allow only your work sites; block everything else.
+- 🔒 **Locked sessions** — timed focus blocks that can't be stopped early; a root daemon even repairs the block if you delete it.
+- ⏰ **Schedules** — auto-switch modes by time of day and weekday.
+- 🖥️ **CLI + GUI** — argparse command line and a Tkinter desktop app.
+- 🐍 **Zero pip dependencies** — pure Python standard library; `sudo ./install.sh` sets up everything (including Tkinter).
 
 ## The philosophy (why it works this way)
 
@@ -13,7 +29,7 @@ mode that can't be switched off mid-session.
 | **Whitelist** | Blocks a curated universe of time-sinks *except* the work sites you allow. | 2–3h deep-work blocks. No route to distraction. | Friction — you may need to add a legit site mid-work. |
 | **🔒 Locked** | A session that **cannot be stopped before its timer ends.** | People who impulsively uninstall/disable their blocker. | It really won't let you out. That's the point. |
 
-**Recommended setup (the hybrid from the discussion):**
+**Recommended setup (the hybrid approach):**
 - Blacklist as the all-day default — social media always off.
 - Whitelist during focus sessions — only your work sites reachable.
 - Turn on **Locked** for the sessions that matter.
