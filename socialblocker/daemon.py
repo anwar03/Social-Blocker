@@ -15,7 +15,7 @@ from __future__ import annotations
 import signal
 import time
 
-from . import config, hosts_engine
+from . import config, control, hosts_engine
 
 
 class _Stop(Exception):
@@ -34,6 +34,11 @@ def run(interval: int = 5) -> None:
     print(f"[socialblocker] daemon started (interval={interval}s)", flush=True)
     try:
         while True:
+            # Log a focus session the moment it completes, so stats stay current
+            # even if the user never runs a CLI command.
+            if control.reap():
+                print(f"[socialblocker] {time.strftime('%H:%M:%S')} "
+                      f"focus session completed — logged", flush=True)
             state = config.load_state()
             mode, locked, n = hosts_engine.apply(state)
             desc = f"{mode} locked={locked} n={n} " \

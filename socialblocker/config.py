@@ -11,6 +11,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, field, asdict
+from datetime import date
 from pathlib import Path
 
 # --- Paths -----------------------------------------------------------------
@@ -34,6 +35,9 @@ OFF = "off"
 BLACKLIST = "blacklist"
 WHITELIST = "whitelist"
 MODES = (OFF, BLACKLIST, WHITELIST)
+
+# How many days of completed-session history to keep (bounds state.json size).
+LOG_RETENTION_DAYS = 90
 
 
 # --- Bundled default lists -------------------------------------------------
@@ -61,6 +65,16 @@ def universe() -> list[str]:
     return sorted(set(data.get("domains", [])))
 
 
+def presets() -> list[dict]:
+    """Bundled quick-start focus presets (see data/presets.json).
+
+    A preset is only a starting point: it carries a *default* duration, mode and
+    locked flag. The UI/CLI may override the duration when actually starting.
+    """
+    data = _load_json(DATA_DIR / "presets.json")
+    return list(data.get("presets", []))
+
+
 # --- State model -----------------------------------------------------------
 
 @dataclass
@@ -68,6 +82,7 @@ class Session:
     """An active focus block."""
     mode: str = WHITELIST          # what to enforce while it runs
     ends_at: float = 0.0           # unix time; 0 == not running
+    started_at: float = 0.0        # unix time the session began (for stats)
     locked: bool = False           # if True, cannot be stopped early
 
     def active(self) -> bool:
@@ -75,6 +90,19 @@ class Session:
 
     def remaining(self) -> int:
         return max(0, int(self.ends_at - time.time()))
+
+
+@dataclass
+class FocusRecord:
+    """A completed focus session, kept so we can show focus stats.
+
+    `ended_at` doubles as a dedupe key: reaping the same expiry twice (e.g. the
+    daemon and a CLI command racing) must not double-count it.
+    """
+    ended_at: float = 0.0          # unix time the session ended
+    minutes: int = 0               # actual focused minutes (includes extensions)
+    mode: str = WHITELIST
+    locked: bool = False
 
 
 @dataclass
@@ -99,6 +127,7 @@ class State:
     whitelist: list[str] = field(default_factory=default_whitelist)
     session: Session = field(default_factory=Session)
     schedules: list[ScheduleRule] = field(default_factory=list)
+    focus_log: list[FocusRecord] = field(default_factory=list)
 
     # ---- effective mode resolution ----
     def effective(self) -> tuple[str, bool]:
@@ -126,6 +155,38 @@ class State:
                 return r
         return None
 
+    # ---- focus stats (derived from the log) ----
+    def focused_today_min(self) -> int:
+        """Total focused minutes from sessions that completed today (local)."""
+        today = _day_ord(time.time())
+        return sum(r.minutes for r in self.focus_log
+                   if _day_ord(r.ended_at) == today)
+
+    def streak_days(self) -> int:
+        """Consecutive days (up to today) with at least one completed session.
+
+        If nothing is completed today yet, the streak is measured up to
+        yesterday so an in-progress day does not reset it prematurely.
+        """
+        days = {_day_ord(r.ended_at) for r in self.focus_log if r.minutes > 0}
+        if not days:
+            return 0
+        today = _day_ord(time.time())
+        cursor = today if today in days else today - 1
+        if cursor not in days:
+            return 0
+        streak = 0
+        while cursor in days:
+            streak += 1
+            cursor -= 1
+        return streak
+
+    def prune_log(self) -> None:
+        """Drop records older than the retention window (bounds state size)."""
+        cutoff = _day_ord(time.time()) - LOG_RETENTION_DAYS
+        self.focus_log = [r for r in self.focus_log
+                          if _day_ord(r.ended_at) >= cutoff]
+
     # ---- persistence ----
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -142,11 +203,21 @@ class State:
         st.session = Session(
             mode=sess.get("mode", WHITELIST),
             ends_at=float(sess.get("ends_at", 0.0)),
+            started_at=float(sess.get("started_at", 0.0)),
             locked=bool(sess.get("locked", False)),
         )
         st.schedules = [
             ScheduleRule(**{**asdict(ScheduleRule()), **r})
             for r in (d.get("schedules") or [])
+        ]
+        st.focus_log = [
+            FocusRecord(
+                ended_at=float(r.get("ended_at", 0.0)),
+                minutes=int(r.get("minutes", 0)),
+                mode=r.get("mode", WHITELIST),
+                locked=bool(r.get("locked", False)),
+            )
+            for r in (d.get("focus_log") or [])
         ]
         return st
 
@@ -154,6 +225,12 @@ class State:
 def _to_min(hhmm: str) -> int:
     h, m = hhmm.split(":")
     return int(h) * 60 + int(m)
+
+
+def _day_ord(ts: float) -> int:
+    """Local-calendar day number for a unix timestamp (contiguous integers so
+    consecutive days differ by 1 — used for the focus streak)."""
+    return date.fromtimestamp(ts).toordinal()
 
 
 # --- Load / save -----------------------------------------------------------

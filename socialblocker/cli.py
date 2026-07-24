@@ -42,6 +42,38 @@ def cmd_status(args) -> None:
     print(f"Blacklist    : {st['blocklist_count']} domains")
     print(f"Whitelist    : {st['whitelist_count']} domains")
     print(f"Schedules    : {st['schedules']} rule(s)")
+    print(f"Blocked now  : {st['blocked_now']} sites "
+          f"(of {st['universe_size']} in the universe)")
+    print(f"Focus today  : {st['focused_today_min']} min   ·   "
+          f"streak {st['streak_days']} day(s)")
+
+
+def cmd_stats(args) -> None:
+    st = control.status()
+    print(f"Focused today : {st['focused_today_min']} min")
+    print(f"Current streak: {st['streak_days']} day(s)")
+    print(f"Blocked now   : {st['blocked_now']} sites "
+          f"(of {st['universe_size']} in the universe)")
+
+
+def cmd_preset(args) -> None:
+    if args.action == "list":
+        for p in control.list_presets():
+            lock = " 🔒" if p.get("locked") else ""
+            print(f"  {p.get('name',''):<12} {p.get('default_minutes','?'):>3} min  "
+                  f"{p.get('mode','')}{lock}")
+            if p.get("blurb"):
+                print(f"               {p['blurb']}")
+        return
+    _need_root()
+    if not args.name:
+        sys.exit("usage: socialblocker preset start <name> [minutes]")
+    try:
+        mode, locked, n = control.start_preset(args.name, minutes=args.minutes)
+    except (ValueError, LockedError) as e:
+        sys.exit(str(e))
+    lock = " (LOCKED — cannot be stopped early)" if locked else ""
+    print(f"Started preset '{args.name}': {mode}{lock}. {n} domains blocked.")
 
 
 def cmd_mode(args) -> None:
@@ -164,6 +196,15 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("status", help="show current state").set_defaults(func=cmd_status)
+
+    sub.add_parser("stats", help="focus stats (today, streak)").set_defaults(func=cmd_stats)
+
+    pr = sub.add_parser("preset", help="list or start a quick-start preset")
+    pr.add_argument("action", choices=["list", "start"])
+    pr.add_argument("name", nargs="?", help="preset name (for 'start')")
+    pr.add_argument("minutes", nargs="?", type=int,
+                    help="override the preset's default duration")
+    pr.set_defaults(func=cmd_preset)
 
     m = sub.add_parser("mode", help="set the all-day default mode")
     m.add_argument("mode", choices=[OFF, BLACKLIST, WHITELIST])

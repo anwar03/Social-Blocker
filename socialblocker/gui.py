@@ -49,6 +49,9 @@ class App(tk.Tk):
         self.session_var = tk.StringVar(value="")
         ttk.Label(f, textvariable=self.session_var,
                   foreground="#0a7").pack(anchor="w")
+        self.stats_var = tk.StringVar(value="")
+        ttk.Label(f, textvariable=self.stats_var,
+                  foreground="#667").pack(anchor="w")
 
     def _build_mode_row(self):
         f = ttk.LabelFrame(self, text="All-day default mode", padding=10)
@@ -60,6 +63,19 @@ class App(tk.Tk):
     def _build_focus_box(self):
         f = ttk.LabelFrame(self, text="Focus session", padding=10)
         f.pack(fill="x", padx=12, pady=(0, 8))
+
+        # Quick presets: a preset only pre-fills the composer below (mode, locked
+        # and a default duration) — the duration stays adjustable before Start.
+        presets = control.list_presets()
+        if presets:
+            prow = ttk.Frame(f); prow.pack(fill="x", pady=(0, 8))
+            ttk.Label(prow, text="Presets:").pack(side="left", padx=(0, 6))
+            for p in presets:
+                lock = " 🔒" if p.get("locked") else ""
+                label = f"{p.get('name', '')} · {p.get('default_minutes', '?')}m{lock}"
+                # p=p binds the current preset (avoids the late-binding closure bug).
+                ttk.Button(prow, text=label,
+                           command=lambda p=p: self._apply_preset(p)).pack(side="left", padx=2)
 
         row = ttk.Frame(f); row.pack(fill="x")
         ttk.Label(row, text="Minutes:").pack(side="left")
@@ -105,6 +121,12 @@ class App(tk.Tk):
         ttk.Button(f, text="Refresh", command=self._refresh).pack(side="right")
 
     # ---- actions ----
+    def _apply_preset(self, p):
+        """Pre-fill the composer from a preset; the user still presses Start."""
+        self.minutes_var.set(str(p.get("default_minutes", 25)))
+        self.session_mode_var.set(p.get("mode", WHITELIST))
+        self.locked_var.set(bool(p.get("locked", False)))
+
     def _set_mode(self, mode):
         self._do(lambda: control.set_default_mode(mode))
 
@@ -173,6 +195,10 @@ class App(tk.Tk):
                                  f"{m:02d}:{s:02d} remaining")
         else:
             self.session_var.set("No focus session running")
+        self.stats_var.set(
+            f"Blocked now: {st['blocked_now']} sites   ·   "
+            f"Focused today: {st['focused_today_min']} min   ·   "
+            f"Streak: {st['streak_days']} day(s)")
 
     def _render_lists(self):
         state = config.load_state()

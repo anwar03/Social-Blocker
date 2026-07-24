@@ -1,0 +1,26 @@
+{
+  "_comment": "Quick-start focus presets surfaced by the CLI (`socialblocker preset list|start`) and the GUI. A preset is only a STARTING POINT: it pre-fills the focus composer (mode, locked, and a default duration) — the duration stays adjustable in the UI, and `preset start <name> [minutes]` can override it too. Edit freely; no code change needed. Fields: name (str), default_minutes (int > 0), mode ('whitelist'|'blacklist'), locked (bool), blurb (str, optional).",
+  "presets": [
+    {
+      "name": "Deep Work",
+      "default_minutes": 90,
+      "mode": "whitelist",
+      "locked": true,
+      "blurb": "Whitelist + locked — one long, uninterruptible block."
+    },
+    {
+      "name": "Sprint",
+      "default_minutes": 25,
+      "mode": "whitelist",
+      "locked": false,
+      "blurb": "Pomodoro-length whitelist sprint."
+    },
+    {
+      "name": "Wind-down",
+      "default_minutes": 45,
+      "mode": "blacklist",
+      "locked": false,
+      "blurb": "Gentle blacklist — distractions off, the rest of the web open."
+    }
+  ]
+}
