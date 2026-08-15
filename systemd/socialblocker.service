@@ -4,7 +4,9 @@ After=network.target
 
 [Service]
 Type=simple
-# Adjust WorkingDirectory/ExecStart if you install somewhere other than /opt.
+# Template: install.sh rewrites every /opt/socialblocker path to the real prefix
+# (and adds RequiresMountsFor= when the code lives on a non-root filesystem).
+# Only edit these paths by hand if you are installing without install.sh.
 WorkingDirectory=/opt/socialblocker
 ExecStart=/usr/bin/python3 -m socialblocker daemon --interval 5
 Restart=always

@@ -386,4 +386,8 @@ def status() -> dict:
         "autostart_minutes": state.autostart.minutes,
         "autostart_mode": state.autostart.mode,
         "autostart_locked": state.autostart.locked,
+        # Which copy of the code answered. With both copy and linked installs
+        # possible, this is the only reliable way to tell whether the command
+        # you just ran is the checkout you just edited.
+        "source_dir": str(config.PROJECT_DIR),
     }

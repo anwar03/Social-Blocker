@@ -47,6 +47,7 @@ def cmd_status(args) -> None:
           f"(of {st['universe_size']} in the universe)")
     print(f"Focus today  : {st['focused_today_min']} min   ·   "
           f"streak {st['streak_days']} day(s)")
+    print(f"Running from : {st['source_dir']}")
 
 
 def cmd_stats(args) -> None:

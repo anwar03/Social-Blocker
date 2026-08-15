@@ -2,6 +2,34 @@
 
 All notable changes to SocialBlocker. Newest first.
 
+## 2026-08-15 — install: run from any folder, and an editable (`--link`) install
+
+- **`install.sh --link`** — an *editable install* (`pip install -e` equivalent):
+  the `/usr/local/bin/socialblocker` launcher and the systemd unit point at the
+  checkout itself instead of a copy. *Why:* the command already worked from any
+  directory, but `/opt/socialblocker` is a **snapshot** — every source edit
+  needed a reinstall before the global command or the daemon saw it. Copy stays
+  the default (it survives an unmounted disk and is not user-writable).
+  - The unit gains **`RequiresMountsFor=$PREFIX`** when the code is not on the
+    root filesystem. *Why:* this checkout lives on `/media/upstal` (`/dev/sdb`);
+    without it the daemon starts before the disk is mounted and `Restart=always`
+    turns that into a crash loop at every boot.
+  - `--link` warns when the prefix is not root-owned: the root daemon would be
+    executing code any local user can rewrite — a privilege-escalation path, so
+    it is stated rather than hidden.
+  - install.sh now **restarts an already-running daemon**, rejects prefixes
+    containing spaces (`PYTHONPATH` is passed unquoted through `env`), and
+    generates the launcher directly instead of writing it and then `sed`-ing it.
+- `control.status()` gains **`source_dir`**, printed by the CLI as
+  `Running from:`. *Why:* with two install modes there was no way to tell a stale
+  `/opt` copy from the checkout you just edited — exactly the confusion that
+  wasted time during the autostart work.
+- `systemd/socialblocker.service`: comment now says it is a template rewritten by
+  install.sh, not a file to hand-edit.
+- Verified by running both modes against sandboxed paths (launcher + unit
+  inspected, `systemd-analyze verify` clean) and running the generated link-mode
+  launcher from `/tmp`. 23 tests pass, incl. a new `source_dir` assertion.
+
 ## 2026-08-15 — CLAUDE.md: §5 restated as Clean Architecture, in this project's names
 
 - Rewrote §5 to state the **dependency rule** explicitly (inner never imports

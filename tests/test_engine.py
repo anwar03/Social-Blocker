@@ -54,6 +54,12 @@ class EngineTest(unittest.TestCase):
         control.set_default_mode(OFF)
         self.assertEqual(control.status()["blocked_now"], 0)
 
+    def test_status_reports_which_copy_is_running(self):
+        # With copy and linked installs both possible, this field is how a user
+        # tells a stale /opt install from the checkout they just edited.
+        self.assertEqual(control.status()["source_dir"], str(config.PROJECT_DIR))
+        self.assertTrue((config.PROJECT_DIR / "data").is_dir())
+
     # ---- reaping a completed session ----
     def test_reap_logs_once_and_is_idempotent(self):
         st = config.load_state()

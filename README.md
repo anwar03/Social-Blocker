@@ -60,7 +60,7 @@ few seconds, so:
 pacman / zypper / apk), so a single `sudo ./install.sh` sets up everything —
 you don't need to install `python3-tk` by hand.
 
-## Quick start (no install)
+## Quick start (no install — from the project folder)
 
 ```bash
 sudo ./socialblocker.py status
@@ -77,16 +77,51 @@ socialblocker status
 sudo systemctl enable --now socialblocker        # schedules + locked-mode repair
 ```
 
-### Upgrading
+Installing puts a `socialblocker` launcher in `/usr/local/bin`, so **the command
+works from any directory** and the project folder can live wherever you like.
+(Without installing, only `python3 /full/path/to/socialblocker.py …` works from
+elsewhere — `python3 -m socialblocker` needs the repo as your working directory.)
 
-`install.sh` copies the code to `/opt/socialblocker`, and the daemon runs *that*
-copy — editing or pulling into your checkout changes nothing until you reinstall
-and restart:
+### Two install modes
 
 ```bash
-sudo ./install.sh && sudo systemctl restart socialblocker
-socialblocker status                             # confirm the new build is live
+sudo ./install.sh           # copy: snapshot the code into /opt/socialblocker
+sudo ./install.sh --link    # link: run this checkout in place, wherever it is
 ```
+
+| | Copy (default) | Link (`--link`) |
+|---|---|---|
+| Code that runs | `/opt/socialblocker` | your checkout, at its current path |
+| After you edit the source | re-run `install.sh` | already live |
+| If the project folder moves or is deleted | unaffected | the command breaks — re-run `install.sh --link` |
+| Best for | everyday use, shared machines | developing on this repo |
+
+`--link` is the equivalent of `pip install -e`. Two things it trades away, both
+handled but worth knowing:
+
+- **The root daemon executes code you can edit as a normal user.** Anyone who can
+  write to the project folder can then run code as root. Use the copy install on
+  a machine you share.
+- **If the project is on a second disk**, the unit gets `RequiresMountsFor=` so
+  the daemon waits for that disk at boot rather than crash-looping — but if the
+  disk is never mounted, nothing gets blocked. `/opt` is on the root filesystem
+  and always there, which is why copy is the default.
+
+`socialblocker status` ends with a `Running from:` line so you can always tell
+which copy answered.
+
+### Upgrading
+
+With the copy install, the daemon runs `/opt/socialblocker` — editing or pulling
+into your checkout changes nothing until you reinstall:
+
+```bash
+sudo ./install.sh                                # restarts the daemon for you
+socialblocker status                             # 'Running from' confirms it
+```
+
+With `--link` there is nothing to upgrade; just restart the daemon after
+changing code it runs: `sudo systemctl restart socialblocker`.
 
 ## CLI reference
 
