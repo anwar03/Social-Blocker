@@ -11,7 +11,7 @@ import os
 import sys
 import time
 
-from . import config, control, hosts_engine, daemon
+from . import autostart, config, control, hosts_engine, daemon
 from .config import BLACKLIST, WHITELIST, OFF
 from .control import LockedError
 
@@ -35,7 +35,8 @@ def cmd_status(args) -> None:
     print(f"Default mode : {st['default_mode']}")
     print(f"Effective now: {st['effective_mode']}{lock}")
     if st["session_active"]:
-        print(f"Focus session: {st['session_mode']} — "
+        kind = "Boot block   " if st["session_source"] == config.BOOT else "Focus session"
+        print(f"{kind}: {st['session_mode']} — "
               f"{_fmt_remaining(st['session_remaining'])} left")
     else:
         print("Focus session: none")
@@ -155,6 +156,63 @@ def cmd_refresh(args) -> None:
     print(f"Re-applied '{mode}' ({n} domains blocked).")
 
 
+def _print_autostart_status() -> None:
+    st = control.status()
+    lock = "  🔒 locked" if st["autostart_locked"] else ""
+    print(f"Boot block  : {'on' if st['autostart_enabled'] else 'off'} — "
+          f"{st['autostart_minutes']} min {st['autostart_mode']}{lock}")
+    svc = control.service_enabled()
+    svc_txt = "enabled" if svc else "disabled" if svc is False else "not installed"
+    print(f"Boot daemon : {svc_txt}   (systemd unit '{control.SERVICE_NAME}')")
+    print(f"Login entry : {'yes' if control.gui_autostart_enabled() else 'no'}"
+          f"   ({autostart.desktop_path()})")
+    if st["autostart_enabled"] and not svc:
+        print("\nNote: the boot block is armed by the daemon, and the daemon is not "
+              "enabled at boot.\n      Run: sudo socialblocker autostart --service on")
+
+
+def cmd_autostart(args) -> None:
+    did_something = False
+
+    # The login entry is the user's own ~/.config file — no root involved.
+    if args.gui is not None:
+        print(f"Login entry : {control.set_gui_autostart(args.gui == 'on')}")
+        did_something = True
+
+    if args.service is not None:
+        _need_root()
+        try:
+            print(f"Boot daemon : {control.set_service_enabled(args.service == 'on')}")
+        except RuntimeError as e:
+            sys.exit(str(e))
+        did_something = True
+
+    mode = BLACKLIST if args.blacklist else WHITELIST if args.whitelist else None
+    locked = True if args.locked else False if args.unlocked else None
+    enabled = None if args.session is None else (args.session == "on")
+    if any(v is not None for v in (enabled, args.minutes, mode, locked)):
+        _need_root()
+        try:
+            a = control.set_autostart(enabled=enabled, minutes=args.minutes,
+                                      mode=mode, locked=locked)
+        except ValueError as e:
+            sys.exit(str(e))
+        lock = " (LOCKED — the UI will not be able to stop it)" if a.locked else ""
+        print(f"Boot block  : {'on' if a.enabled else 'off'} — "
+              f"{a.minutes} min {a.mode}{lock}")
+        did_something = True
+
+    if not did_something:
+        _print_autostart_status()
+
+
+def cmd_gui(args) -> None:
+    # Imported lazily: Tkinter is a separate system package, and the CLI must
+    # keep working on machines that do not have it.
+    from . import gui
+    gui.main()
+
+
 def cmd_daemon(args) -> None:
     _need_root()
     daemon.run(interval=args.interval)
@@ -249,6 +307,35 @@ def build_parser() -> argparse.ArgumentParser:
     ls = sub.add_parser("list", help="print a blocklist/whitelist")
     ls.add_argument("which", choices=["block", "allow"])
     ls.set_defaults(func=cmd_list)
+
+    au = sub.add_parser(
+        "autostart",
+        help="start blocking automatically when the machine boots",
+        description="Three independent switches. --session arms a block at every "
+                    "boot, --service makes the daemon (which arms it) run at boot, "
+                    "and --gui opens the app at login so you can switch it off. "
+                    "With no arguments, prints the status of all three.")
+    au.add_argument("--session", choices=["on", "off"],
+                    help="arm a block automatically at every boot")
+    au.add_argument("--minutes", type=int,
+                    help="how long the boot block lasts (default 300)")
+    grp3 = au.add_mutually_exclusive_group()
+    grp3.add_argument("--blacklist", action="store_true",
+                      help="(default) boot block just blocks distractions")
+    grp3.add_argument("--whitelist", action="store_true",
+                      help="boot block allows only the whitelist")
+    grp4 = au.add_mutually_exclusive_group()
+    grp4.add_argument("--locked", action="store_true",
+                      help="boot block cannot be stopped from the UI")
+    grp4.add_argument("--unlocked", action="store_true",
+                      help="(default) boot block can be stopped any time")
+    au.add_argument("--service", choices=["on", "off"],
+                    help="run the enforcement daemon at boot (systemd)")
+    au.add_argument("--gui", choices=["on", "off"],
+                    help="open the app at login (XDG Startup Applications entry)")
+    au.set_defaults(func=cmd_autostart)
+
+    sub.add_parser("gui", help="open the Tkinter window").set_defaults(func=cmd_gui)
 
     sub.add_parser("refresh", help="re-apply the effective mode").set_defaults(func=cmd_refresh)
 

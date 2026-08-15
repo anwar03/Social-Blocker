@@ -20,8 +20,8 @@ _TMP = tempfile.mkdtemp(prefix="sb-test-")
 os.environ["SOCIALBLOCKER_HOME"] = _TMP
 os.environ["SOCIALBLOCKER_HOSTS"] = os.path.join(_TMP, "hosts")
 
-from socialblocker import config, control, hosts_engine  # noqa: E402
-from socialblocker.config import BLACKLIST, WHITELIST, OFF  # noqa: E402
+from socialblocker import autostart, config, control, hosts_engine  # noqa: E402
+from socialblocker.config import BLACKLIST, WHITELIST, OFF, BOOT, MANUAL  # noqa: E402
 
 
 def _ts_days_ago(n: int, hour: int = 12) -> float:
@@ -171,6 +171,155 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(state.session.started_at, 0.0)
         self.assertEqual(state.focused_today_min(), 0)
         self.assertEqual(state.streak_days(), 0)
+        # Autostart is new too: absent config must load as "off", never armed.
+        self.assertFalse(state.autostart.enabled)
+        self.assertEqual(state.autostart.minutes, 300)
+        self.assertEqual(state.session.source, MANUAL)
+
+
+class BootAutostartTest(unittest.TestCase):
+    """Arming a block once per boot (the daemon's Restart=always problem)."""
+
+    def setUp(self):
+        config.ensure_config_dir()
+        if config.STATE_FILE.exists():
+            config.STATE_FILE.unlink()
+        with open(config.HOSTS_FILE, "w", encoding="utf-8") as fh:
+            fh.write("127.0.0.1\tlocalhost\n")
+        os.environ["SOCIALBLOCKER_BOOT_ID"] = "boot-1"
+
+    def tearDown(self):
+        os.environ.pop("SOCIALBLOCKER_BOOT_ID", None)
+
+    def _enable(self, **kw):
+        """Enable autostart *as if from a previous boot*, so it is due to arm."""
+        control.set_autostart(enabled=True, **kw)
+        st = config.load_state()
+        st.autostart.last_boot_id = "an-older-boot"
+        config.save_state(st)
+
+    def test_arms_once_per_boot(self):
+        self._enable(minutes=300, mode=BLACKLIST)
+        self.assertIsNotNone(control.arm_boot_session())
+
+        sess = config.load_state().session
+        self.assertTrue(sess.active())
+        self.assertEqual(sess.source, BOOT)
+        self.assertEqual(sess.mode, BLACKLIST)
+        self.assertGreater(sess.remaining(), 299 * 60)
+
+        # The daemon restarting (same boot) must not re-arm anything.
+        self.assertIsNone(control.arm_boot_session())
+
+    def test_stopped_block_stays_stopped_until_next_boot(self):
+        self._enable(minutes=300)
+        control.arm_boot_session()
+        control.stop_session()                       # user switches it off in the UI
+        self.assertIsNone(control.arm_boot_session())  # crash-restart: stays off
+        self.assertFalse(config.load_state().session.active())
+
+        os.environ["SOCIALBLOCKER_BOOT_ID"] = "boot-2"   # actual reboot
+        self.assertIsNotNone(control.arm_boot_session())
+        self.assertTrue(config.load_state().session.active())
+
+    def test_reboot_does_not_escape_a_locked_session(self):
+        self._enable(minutes=300)
+        control.start_session(30, mode=WHITELIST, locked=True)
+        os.environ["SOCIALBLOCKER_BOOT_ID"] = "boot-2"
+
+        self.assertIsNone(control.arm_boot_session())  # left alone, not replaced
+        sess = config.load_state().session
+        self.assertTrue(sess.locked)
+        self.assertEqual(sess.mode, WHITELIST)
+        self.assertEqual(sess.source, MANUAL)
+        self.assertLessEqual(sess.remaining(), 30 * 60)
+
+    def test_enabling_takes_effect_from_the_next_boot(self):
+        # Enabling stamps the current boot, so a daemon restart later today
+        # cannot spring a block the user did not ask for right now.
+        control.set_autostart(enabled=True, minutes=300)
+        self.assertIsNone(control.arm_boot_session())
+        os.environ["SOCIALBLOCKER_BOOT_ID"] = "boot-2"
+        self.assertIsNotNone(control.arm_boot_session())
+
+    def test_disabled_never_arms(self):
+        control.set_autostart(enabled=False)
+        self.assertIsNone(control.arm_boot_session())
+        self.assertFalse(config.load_state().session.active())
+
+    def test_unknown_boot_id_does_not_arm(self):
+        # Fail safe: if we cannot identify the boot we must not arm at all,
+        # rather than arm on every single daemon start.
+        self._enable(minutes=300)
+        original = config.boot_id
+        config.boot_id = lambda: ""
+        try:
+            self.assertIsNone(control.arm_boot_session())
+        finally:
+            config.boot_id = original
+        self.assertFalse(config.load_state().session.active())
+
+    def test_boot_block_is_not_counted_as_focus(self):
+        # 300 min logged every day would make "focused today" and the streak
+        # meaningless, so a completed boot block is cleared but never logged.
+        self._enable(minutes=300)
+        control.arm_boot_session()
+        st = config.load_state()
+        st.session.ends_at = time.time() - 5      # pretend it ran out
+        config.save_state(st)
+
+        control.reap()
+        after = config.load_state()
+        self.assertEqual(after.focus_log, [])
+        self.assertEqual(after.focused_today_min(), 0)
+        self.assertFalse(after.session.active())
+
+    def test_autostart_config_is_validated(self):
+        with self.assertRaises(ValueError):
+            control.set_autostart(minutes=0)
+        with self.assertRaises(ValueError):
+            control.set_autostart(mode=OFF)
+
+
+class DesktopEntryTest(unittest.TestCase):
+    """The XDG autostart (.desktop) entry that Startup Applications lists."""
+
+    def setUp(self):
+        self._saved = {k: os.environ.get(k)
+                       for k in ("XDG_CONFIG_HOME", "SUDO_USER", "PKEXEC_UID")}
+        # Never write into the real ~/.config while testing.
+        os.environ["XDG_CONFIG_HOME"] = os.path.join(_TMP, "config")
+        os.environ.pop("SUDO_USER", None)
+        os.environ.pop("PKEXEC_UID", None)
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_enable_writes_a_launchable_entry(self):
+        self.assertFalse(autostart.enabled())
+        path = autostart.enable()
+
+        self.assertTrue(autostart.enabled())
+        self.assertEqual(path, autostart.desktop_path())
+        self.assertTrue(str(path).startswith(os.environ["XDG_CONFIG_HOME"]))
+        body = path.read_text(encoding="utf-8")
+        self.assertIn("[Desktop Entry]", body)
+        self.assertIn("Type=Application", body)
+        self.assertIn("X-GNOME-Autostart-enabled=true", body)
+        exec_line = [ln for ln in body.splitlines() if ln.startswith("Exec=")][0]
+        self.assertIn("gui", exec_line)
+
+    def test_enable_is_idempotent_and_disable_removes(self):
+        autostart.enable()
+        autostart.enable()          # writing twice must not fail or duplicate
+        self.assertTrue(autostart.enabled())
+        self.assertTrue(autostart.disable())
+        self.assertFalse(autostart.enabled())
+        self.assertFalse(autostart.disable())   # already gone
 
 
 if __name__ == "__main__":

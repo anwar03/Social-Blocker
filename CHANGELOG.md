@@ -2,6 +2,89 @@
 
 All notable changes to SocialBlocker. Newest first.
 
+## 2026-08-15 — CLAUDE.md: §5 restated as Clean Architecture, in this project's names
+
+- Rewrote §5 to state the **dependency rule** explicitly (inner never imports
+  outer), with the real import chain `cli/gui/daemon -> control -> hosts_engine
+  -> config` and a term-mapping table (entities/use case/adapter/driver ->
+  `config.py`/`control.py`/`hosts_engine.py`/`cli.py`). *Why:* the layering was
+  already correct but was written as house style, so there was nothing to appeal
+  to when deciding where a new module belongs.
+- **Kept this project's module names**; did not adopt `core/application/`,
+  `core/services/<platform>/`, `commons/dto/`, `clients/`, `iac/`. *Why:* those
+  describe a TypeScript/Lambda monorepo. Five modules and ~1800 lines do not need
+  a directory per circle, and the folder churn would break §2's YAGNI rule and
+  every documented command path. The named equivalents are in the table instead.
+- Documented `SOCIALBLOCKER_HOME` / `SOCIALBLOCKER_HOSTS` as **the** dependency-
+  inversion seam (the project's port), so tests substitute the hosts file rather
+  than hard-coding a path.
+- Recorded the one real dependency-rule violation: `control.py` (inner) imports
+  `autostart.py` (outer adapter — `pwd`, `chown`, `~/.config`), with the
+  inversion to apply if autostart grows. Also added `autostart.py`, `systemd/`
+  and `install.sh` to the tree, which the old diagram omitted.
+
+## 2026-08-15 — CLAUDE.md: Clean Code limits added to §6
+
+- Added a **Clean Code limits** subsection to §6 Code Style: function/class size
+  ceilings (≤25 lines / ≤250 lines, preferring far smaller), intent-revealing
+  names, and SOLID applied where it helps. *Why:* §6 said "functions small and
+  single-purpose" with no number, which is unenforceable in review.
+- Adapted the accompanying error rule to this codebase: purpose-specific
+  exception classes (as `control.LockedError` already does) kept in one place, so
+  `cli.py` and `gui.py` catch the same types. *Why:* the rule as written referred
+  to a `commons/` package of shared error codes — a JS/TS layout that does not
+  exist here, and adding one would fight the stdlib-only, five-module design.
+
+## 2026-08-15 — autostart: block automatically at boot
+
+- **Block on every boot (default 300 min), switchable off from the UI.** Three
+  deliberately independent switches: the state flag that arms a block, the
+  systemd service that runs the daemon which arms it, and an XDG `.desktop`
+  entry that opens the GUI at login. *Why:* the first is useless without the
+  second, and without the third there is no visible way to switch it off.
+  - `config.py`: `Autostart` config (`enabled`/`minutes=300`/`mode=blacklist`/
+    `locked=False`/`last_boot_id`), `Session.source` (`manual` vs `boot`), and
+    `boot_id()` reading `/proc/sys/kernel/random/boot_id` (falls back to
+    `/proc/stat` btime). Backward-compatible load — old `state.json` still works.
+  - `control.py`: `arm_boot_session()` — **idempotent per boot, not per process**.
+    The daemon runs under `Restart=always`, so keying on process start would
+    re-arm a full timer on every crash-restart, undoing the user's Stop. The boot
+    id is the idempotency key, saved in the same atomic write as the session so a
+    crash can't mark a boot handled with nothing armed. An active session is never
+    replaced — rebooting does not escape a locked session. Also `set_autostart()`
+    (stamps the current boot on enable, so it takes effect from the *next* boot,
+    not from the next daemon restart today), `service_enabled()` /
+    `set_service_enabled()` (systemctl; `disable` omits `--now` so nothing
+    silently unblocks), and the `.desktop` wrappers.
+  - Boot blocks are **excluded from `focus_log`**: logging ~300 min every day
+    would make "focused today" and the streak meaningless.
+  - `autostart.py` (new): writes `~/.config/autostart/socialblocker.desktop`
+    atomically. Resolves the *real* desktop user via `SUDO_USER`/`PKEXEC_UID` and
+    chowns the result — under sudo, `$HOME` is root's and the entry would land
+    where the session never reads it.
+  - `daemon.py`: arms once at startup and logs it.
+  - `cli.py`: `autostart [--session on|off] [--minutes N] [--blacklist|--whitelist]
+    [--locked|--unlocked] [--service on|off] [--gui on|off]`, bare `autostart`
+    prints all three (and warns when the block is armed but the daemon is not
+    enabled). New `gui` subcommand — the README had documented it for a while
+    without it existing.
+  - `gui.py`: "Start with the computer" panel; the window now runs **unprivileged**
+    and elevates one CLI command per change through `pkexec` (least privilege — no
+    long-lived root Tk process, and no `DISPLAY`/`XAUTHORITY` juggling). Stopping a
+    boot block now says you are back on the all-day default, since "stop" reads as
+    "unblock". Fixed the countdown showing `299:25` for long blocks (now `4:59:02`).
+  - `tests/test_engine.py`: 10 new cases (22 total, all passing) — arm-once-per-boot,
+    stopped-stays-stopped across a restart, re-arm on a new boot, locked session
+    survives reboot, enable takes effect next boot, unknown boot id never arms,
+    boot block not logged as focus, config validation, `.desktop` write/idempotency.
+  - Verified end-to-end against a throwaway hosts file (simulated boot → armed →
+    stopped → crash-restart stays off → new boot re-arms), and the GUI was built
+    and laid out for real (unmapped window, so nothing popped up on screen).
+  - `README.md` / `install.sh`: documented the three switches, plus the two facts
+    that otherwise read as bugs — enabling takes effect from the *next* boot, and
+    an **Upgrading** section (the daemon runs `/opt/socialblocker`, so a checkout
+    edit does nothing until `sudo ./install.sh && sudo systemctl restart`).
+
 ## 2026-07-24 — GUI parity: stats + presets
 
 - **Tkinter `gui.py` brought to parity** with the CLI's new engine features.

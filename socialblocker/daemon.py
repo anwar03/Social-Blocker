@@ -32,6 +32,16 @@ def run(interval: int = 5) -> None:
 
     last_desc = None
     print(f"[socialblocker] daemon started (interval={interval}s)", flush=True)
+
+    # Arm the configured boot block. Safe to call on every start: control keys
+    # it on the boot id, so a systemd Restart=always crash-loop cannot re-arm a
+    # session the user already stopped.
+    armed = control.arm_boot_session()
+    if armed is not None:
+        mode, locked, n = armed
+        print(f"[socialblocker] {time.strftime('%H:%M:%S')} autostart armed "
+              f"{mode} locked={locked} n={n}", flush=True)
+
     try:
         while True:
             # Log a focus session the moment it completes, so stats stay current

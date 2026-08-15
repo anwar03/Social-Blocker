@@ -79,3 +79,8 @@ echo "  socialblocker focus 90 --locked       # 90-min locked whitelist focus"
 echo
 echo "Enable the always-on daemon (needed for schedules + locked-mode repair):"
 echo "  sudo systemctl enable --now socialblocker"
+echo
+echo "Start blocking automatically with the computer:"
+echo "  sudo socialblocker autostart --session on --minutes 300 --blacklist"
+echo "  sudo socialblocker autostart --service on   # daemon at boot"
+echo "  socialblocker autostart --gui on            # open the app at login"

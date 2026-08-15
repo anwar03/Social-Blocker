@@ -86,23 +86,58 @@ Git commits are optional — commit only when the user asks.
 
 ---
 
-## 5. Architecture (respect the layering)
+## 5. Architecture (Clean Architecture — respect the layering)
 
-Data flows one direction; keep responsibilities where they belong.
+Clean Architecture's **dependency rule is absolute: inner layers never import
+from outer layers.** This project already satisfies it. It expresses the rule as
+a **flat package of modules**, not as `core/application` + `core/services`
+folders — five modules and ~1800 lines do not need a directory per circle, and
+inventing one would violate the YAGNI rule in §2. The circles below are the
+layers; the module names are the contract. **Do not rename them to generic
+Clean-Architecture folder names.**
 
 ```
 socialblocker/
-  config.py        # paths, state model, mode resolution (session > schedule > default)
-  hosts_engine.py  # translate the effective mode -> the /etc/hosts fenced region
-  control.py       # high-level ops; THE ONE PLACE locked-mode is enforced
-  daemon.py        # re-apply loop: schedules, session expiry, tamper repair
-  cli.py           # argparse CLI
-  gui.py           # Tkinter GUI
+  config.py        # INNER: paths, state model (dataclasses), mode resolution
+                   #        (session > schedule > default). Imports nothing internal.
+  hosts_engine.py  # INNER: translate the effective mode -> the /etc/hosts fenced region
+  control.py       # INNER: use cases; THE ONE PLACE locked-mode is enforced
+  autostart.py     # OUTER adapter: XDG .desktop entry in ~/.config/autostart
+  daemon.py        # OUTER: re-apply loop (schedules, session expiry, tamper repair)
+  cli.py           # OUTER: argparse CLI          -- delivery mechanism
+  gui.py           # OUTER: Tkinter GUI + pkexec  -- delivery mechanism
+systemd/, install.sh  # OUTER: deployment (this project's "iac")
 data/
   blocklist.json          # default blacklist (categorised)
   whitelist.example.json  # example focus-session allow-list
   universe.json           # the distraction set whitelist mode blocks-except-allow
 ```
+
+**The dependency rule, concretely.** Imports may only point *inward*:
+
+```
+cli.py / gui.py / daemon.py  ->  control.py  ->  hosts_engine.py  ->  config.py
+```
+
+`config.py` is the innermost circle and must keep importing **nothing** from
+this package. No inner module may import `cli`, `gui`, or `daemon` — a use case
+that needs to talk to the user returns a value or raises; it never prints.
+
+**Where the Clean Architecture vocabulary lands here** (use these names, not the
+generic ones):
+
+| Clean Architecture term      | This project                                       |
+| ---------------------------- | -------------------------------------------------- |
+| Entities / shared DTOs       | `config.py` dataclasses (`State`, `Session`, `Autostart`) |
+| Use-case services            | functions in `control.py`                          |
+| Workflow-specific error      | `control.LockedError`                              |
+| Interface adapter            | `hosts_engine.py` (policy -> hosts text), `autostart.py` |
+| Frameworks & drivers         | `cli.py`, `gui.py`, `daemon.py`, Tkinter, systemd, pkexec |
+| Dependency-inversion seam    | `SOCIALBLOCKER_HOME` / `SOCIALBLOCKER_HOSTS` env overrides |
+
+That last row matters: the env overrides are how tests substitute the real
+`/etc/hosts` without root. They are this codebase's port. **Do not bypass them
+by hard-coding a path** — that is what "depend on abstractions" means here.
 
 Rules that keep this clean:
 - **`config.py` owns state and mode resolution.** Effective mode precedence is
@@ -118,6 +153,21 @@ Rules that keep this clean:
   through the same `control.py` functions.
 - **`daemon.py` only re-applies** — it reads state and calls the engine; it does
   not make policy decisions of its own.
+- **Known violation — do not copy it.** `control.py` imports `autostart.py`,
+  which is an outer adapter (it touches `pwd`, `chown`, `~/.config`). That is an
+  inner circle reaching outward. If autostart grows, invert it: `control.py`
+  takes the enable/disable callable as a parameter, and `cli.py` / `gui.py`
+  supply `autostart`'s implementation.
+
+**Adding a new use case:**
+1. State/config changes (if any) go in `config.py` first.
+2. The use-case function goes in `control.py` — it enforces the lock and calls
+   `hosts_engine.py`; it never formats hosts lines or prints.
+3. Wire it into **both** `cli.py` and `gui.py` (§5 requires feature parity), each
+   a thin call-through.
+4. If it needs new infrastructure (a file, a service, a desktop entry), put that
+   in its own adapter module beside `autostart.py` and pass it inward — do not
+   let `config.py` or `hosts_engine.py` import it.
 
 ---
 
@@ -131,10 +181,23 @@ Rules that keep this clean:
 - **Errors:** raise clear, specific exceptions with actionable messages. A
   root/`/etc/hosts` permission failure should tell the user to run with `sudo`,
   not dump a raw traceback. Never fail silently on a hosts write.
+- **Errors, cont.:** prefer purpose-specific exception classes (like the existing
+  `control.LockedError`) over bare `ValueError` / `RuntimeError` for anything a
+  front-end has to *react* to differently. Keep them in one place so `cli.py` and
+  `gui.py` catch the same types; bare built-ins are fine for plain input
+  validation that both front-ends just print.
 - **Idempotency:** re-applying the same mode must produce the same hosts region
   (the daemon runs every few seconds — no duplicated lines, no drift).
 - **Observability:** the daemon should log what it re-applies / repairs so a user
   can answer "why is this site blocked right now?".
+
+### Clean Code limits
+
+- Functions ≤ 25 lines (prefer ≤ 10); classes ≤ 250 lines (prefer ≤ 150) —
+  but never at the cost of readability.
+- Names must express intent; every code block should make its purpose obvious.
+- Follow SOLID principles. Apply design patterns where they help, not where
+  they hurt manageability — the layering in §5 is the main one that matters here.
 
 ---
 

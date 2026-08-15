@@ -36,8 +36,46 @@ BLACKLIST = "blacklist"
 WHITELIST = "whitelist"
 MODES = (OFF, BLACKLIST, WHITELIST)
 
+# Where a session came from. A boot block is enforcement, not focus work, so it
+# is deliberately excluded from the focus log (see control._reap_completed).
+MANUAL = "manual"
+BOOT = "boot"
+
 # How many days of completed-session history to keep (bounds state.json size).
 LOG_RETENTION_DAYS = 90
+
+# Kernel-provided identity of the running boot; changes on every reboot.
+BOOT_ID_FILE = Path("/proc/sys/kernel/random/boot_id")
+
+
+def boot_id() -> str:
+    """A token that is stable for the life of this boot and differs after a reboot.
+
+    This is the idempotency key for autostart. The daemon runs under
+    `Restart=always`, so "arm a session when the daemon starts" would re-arm a
+    full timer on every crash-restart — the user stops the block, systemd
+    restarts the daemon, and it comes straight back. Keying on the *boot*
+    instead of the process makes arming happen exactly once per boot.
+
+    Returns "" when the identity cannot be determined; callers must treat that
+    as "do not arm" rather than "arm again", so an unreadable /proc can never
+    produce a surprise block.
+    """
+    override = os.environ.get("SOCIALBLOCKER_BOOT_ID")
+    if override:
+        return override
+    try:
+        return BOOT_ID_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    # Fallback: kernel boot time ("btime <unix-seconds>" in /proc/stat).
+    try:
+        for line in Path("/proc/stat").read_text(encoding="utf-8").splitlines():
+            if line.startswith("btime "):
+                return "btime-" + line.split()[1]
+    except OSError:
+        pass
+    return ""
 
 
 # --- Bundled default lists -------------------------------------------------
@@ -84,6 +122,7 @@ class Session:
     ends_at: float = 0.0           # unix time; 0 == not running
     started_at: float = 0.0        # unix time the session began (for stats)
     locked: bool = False           # if True, cannot be stopped early
+    source: str = MANUAL           # MANUAL (user asked) or BOOT (armed at boot)
 
     def active(self) -> bool:
         return self.ends_at > time.time()
@@ -120,6 +159,22 @@ class ScheduleRule:
 
 
 @dataclass
+class Autostart:
+    """Arm a block automatically, once per machine boot.
+
+    `last_boot_id` is the dedupe key: it records the boot this config was last
+    acted on. Enabling autostart stamps it with the *current* boot so the
+    setting takes effect from the next boot — otherwise a daemon crash-restart
+    later the same day would arm an unexpected block.
+    """
+    enabled: bool = False
+    minutes: int = 300
+    mode: str = BLACKLIST          # 5h of whitelist from login is too brutal a default
+    locked: bool = False           # opt-in only: locked means the UI cannot stop it
+    last_boot_id: str = ""
+
+
+@dataclass
 class State:
     # The mode enforced when no session/schedule overrides it.
     default_mode: str = BLACKLIST
@@ -128,6 +183,7 @@ class State:
     session: Session = field(default_factory=Session)
     schedules: list[ScheduleRule] = field(default_factory=list)
     focus_log: list[FocusRecord] = field(default_factory=list)
+    autostart: Autostart = field(default_factory=Autostart)
 
     # ---- effective mode resolution ----
     def effective(self) -> tuple[str, bool]:
@@ -205,6 +261,15 @@ class State:
             ends_at=float(sess.get("ends_at", 0.0)),
             started_at=float(sess.get("started_at", 0.0)),
             locked=bool(sess.get("locked", False)),
+            source=sess.get("source", MANUAL),
+        )
+        auto = d.get("autostart") or {}
+        st.autostart = Autostart(
+            enabled=bool(auto.get("enabled", False)),
+            minutes=int(auto.get("minutes", 300)),
+            mode=auto.get("mode", BLACKLIST),
+            locked=bool(auto.get("locked", False)),
+            last_boot_id=str(auto.get("last_boot_id", "")),
         )
         st.schedules = [
             ScheduleRule(**{**asdict(ScheduleRule()), **r})

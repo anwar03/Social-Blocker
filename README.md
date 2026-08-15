@@ -18,6 +18,7 @@ you both modes *and* a locked mode that can't be switched off mid-session.
 - 🎯 **Whitelist** — during focus sessions, allow only your work sites; block everything else.
 - 🔒 **Locked sessions** — timed focus blocks that can't be stopped early; a root daemon even repairs the block if you delete it.
 - ⏰ **Schedules** — auto-switch modes by time of day and weekday.
+- 🔌 **Starts with your computer** — boot straight into a block (300 min by default), switchable off from the UI.
 - 🖥️ **CLI + GUI** — argparse command line and a Tkinter desktop app.
 - 🐍 **Zero pip dependencies** — pure Python standard library; `sudo ./install.sh` sets up everything (including Tkinter).
 
@@ -76,6 +77,17 @@ socialblocker status
 sudo systemctl enable --now socialblocker        # schedules + locked-mode repair
 ```
 
+### Upgrading
+
+`install.sh` copies the code to `/opt/socialblocker`, and the daemon runs *that*
+copy — editing or pulling into your checkout changes nothing until you reinstall
+and restart:
+
+```bash
+sudo ./install.sh && sudo systemctl restart socialblocker
+socialblocker status                             # confirm the new build is live
+```
+
 ## CLI reference
 
 ```bash
@@ -93,20 +105,59 @@ socialblocker list   block|allow
 socialblocker schedule --start 09:00 --end 12:00 \
     --days weekdays --whitelist --locked  # recurring auto-switch
 socialblocker refresh                    # re-apply (the daemon does this for you)
+
+socialblocker autostart                  # status of all three switches below
+socialblocker gui                        # open the desktop app
 ```
 
 `--days` accepts `weekdays`, `weekend`, `all`, or a list like `mon,wed,fri`.
 
+## Start with the computer
+
+Three independent switches — the first does nothing without the second:
+
+```bash
+sudo socialblocker autostart --session on --minutes 300 --blacklist
+sudo socialblocker autostart --service on    # run the daemon at boot (systemd)
+socialblocker autostart --gui on             # open the app at login (no sudo)
+sudo socialblocker autostart --session off   # stop blocking at boot
+```
+
+| Switch | Mechanism | Job |
+|--------|-----------|-----|
+| `--session` | flag in `state.json` | arm a block on every boot |
+| `--service` | systemd unit | run the daemon that arms it, before login |
+| `--gui` | `~/.config/autostart/*.desktop` | open the window at login so you can switch it off |
+
+`--gui` writes a normal XDG entry, so it shows up in GNOME's **Startup
+Applications** list and you can untick or remove it there.
+
+The block is armed **once per boot**, keyed on the kernel's boot id: stop it in
+the UI and it stays stopped, even if the daemon restarts. It comes back at the
+next real reboot. It is unlocked by default — add `--locked` and you genuinely
+cannot stop it until the timer runs out. A boot block is not counted as focus
+time, so it never inflates your streak.
+
+> **Switching it on takes effect from your next boot, not immediately.** Turning
+> it on marks the current boot as already handled — otherwise any daemon restart
+> later today would spring a 5-hour block you never asked for.
+
+> Stopping the boot block returns you to your **all-day default mode**, which
+> ships as `blacklist`. Press **Off** if you want everything unblocked.
+
 ## GUI
 
 ```bash
-sudo -E python3 -m socialblocker.gui
-# on a desktop session you can also use pkexec:
-#   pkexec env DISPLAY=$DISPLAY XAUTHORITY=$XAUTHORITY python3 -m socialblocker.gui
+socialblocker gui        # as your normal user — no sudo
 ```
 
 Pick the all-day mode, start a focus session (with a length, whitelist/blacklist,
-and the Locked checkbox), and edit both lists live.
+and the Locked checkbox), configure the boot block, and edit both lists live.
+
+The window runs unprivileged: it reads state directly, and each change elevates
+a single `socialblocker` CLI command through **pkexec**, so you get one password
+prompt per change and no long-running root GUI. `sudo -E socialblocker gui`
+still works and skips pkexec entirely.
 
 ## Project layout
 
@@ -115,13 +166,15 @@ socialblocker/
   config.py        # paths, state model, mode resolution (session > schedule > default)
   hosts_engine.py  # translate effective mode -> /etc/hosts region
   control.py       # high-level ops + the one place locked-mode is enforced
-  daemon.py        # re-apply loop (schedules, expiry, tamper repair)
+  daemon.py        # re-apply loop (schedules, expiry, tamper repair, boot arming)
+  autostart.py     # the ~/.config/autostart .desktop entry (login, user-level)
   cli.py           # argparse CLI
   gui.py           # Tkinter GUI
 data/
   blocklist.json         # default blacklist (categorised)
   whitelist.example.json # example focus-session allow-list
   universe.json          # the distraction set whitelist mode blocks-except-allow
+  presets.json           # quick-start focus presets
 systemd/socialblocker.service
 install.sh
 ```
