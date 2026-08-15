@@ -189,6 +189,16 @@ socialblocker gui        # as your normal user — no sudo
 Pick the all-day mode, start a focus session (with a length, whitelist/blacklist,
 and the Locked checkbox), configure the boot block, and edit both lists live.
 
+The window uses the **Mist** look: a status hero with a live countdown ring,
+a segmented mode control, quick presets, and the focus stats. Colours, fonts
+and the generated art all live in `mistkit.py`.
+
+> **Fonts (optional).** Mist is designed for **Manrope** (UI) and **Instrument
+> Serif** (headings). Nothing is bundled — the app falls back through
+> Inter / Cantarell / Ubuntu / DejaVu Sans and Charter / DejaVu Serif, so it
+> looks right out of the box and simply looks *closer to the design* if you
+> install those two system-wide.
+
 The window runs unprivileged: it reads state directly, and each change elevates
 a single `socialblocker` CLI command through **pkexec**, so you get one password
 prompt per change and no long-running root GUI. `sudo -E socialblocker gui`
@@ -204,7 +214,8 @@ socialblocker/
   daemon.py        # re-apply loop (schedules, expiry, tamper repair, boot arming)
   autostart.py     # the ~/.config/autostart .desktop entry (login, user-level)
   cli.py           # argparse CLI
-  gui.py           # Tkinter GUI
+  gui.py           # Tkinter GUI (the "Mist" look)
+  mistkit.py       # Mist design system: tokens, ttk theme, generated fog/ring art
 data/
   blocklist.json         # default blacklist (categorised)
   whitelist.example.json # example focus-session allow-list

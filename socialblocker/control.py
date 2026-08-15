@@ -375,6 +375,11 @@ def status() -> dict:
         "session_remaining": state.session.remaining(),
         "session_mode": state.session.mode,
         "session_source": state.session.source,
+        # Elapsed-fraction inputs for a progress display. Derived here so no
+        # front-end has to do arithmetic on the session entity, and so `extend`
+        # correctly rescales the total rather than overshooting it.
+        "session_started_at": state.session.started_at,
+        "session_total": max(0, int(state.session.ends_at - state.session.started_at)),
         "blocklist_count": len(state.blocklist),
         "whitelist_count": len(state.whitelist),
         "schedules": len(state.schedules),

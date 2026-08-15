@@ -2,6 +2,50 @@
 
 All notable changes to SocialBlocker. Newest first.
 
+## 2026-08-15 — GUI: the "Mist" desktop look
+
+- **New `socialblocker/mistkit.py`** — the Mist design system as an outer-circle
+  adapter: the palette from `SocialBlocker-Mist-Desktop.html`, font resolution,
+  a `ttk.Style` theme on `clam`, and a small raster engine. *Why:* the tokens
+  and the art are ~250 lines of pure rendering with no project knowledge;
+  keeping them in `gui.py` would have buried the part that actually matters,
+  the call-through to `control.py`. It imports nothing from this package.
+  - *Rounded corners and a smooth ring in Tk:* Tk's canvas has neither
+    anti-aliasing nor alpha compositing, so the fog field and the countdown
+    ring are drawn into an RGB byte buffer, sampled 3x3 per pixel and averaged
+    down (SSAA), encoded as PNG with `zlib` + `struct`, and loaded through
+    `tk.PhotoImage`, which reads PNG natively in Tk 8.6. **Zero new
+    dependencies** — the alternative was vendoring an imaging library.
+  - The mockup's `rgba()` tokens are composited against their real backdrop
+    once, at import, because Tk widgets have no alpha channel.
+  - *Measured:* the ring redraw was **p95 121 ms → 50.7 ms** (median 34.9 ms)
+    by caching the fog+track backdrop, which never changes with the countdown,
+    and skipping subsampling on pixels fully inside the stroke. The fog field
+    costs ~160 ms, once, at half resolution + `zoom(2)`.
+- **`gui.py` rebuilt to the Mist layout** — status hero with a live countdown
+  ring, a segmented all-day mode control, presets and the focus composer side
+  by side, three stat tiles, and the lists. Same features as before; the
+  boot-block settings moved into a **Startup** tab so the page stays shorter.
+  All `control.py` calls, the pkexec elevation and the locked-mode behaviour
+  are unchanged — the front-end stayed thin.
+  - The body **scrolls**: the full layout is ~960px tall and this machine has a
+    1360x768 output, so a fixed layout would have cut off the lists.
+  - Two measured layout bugs fixed: the page opened scrolled to the bottom
+    (now forced to the top after layout), and the hero's `+15 / Stop` buttons
+    collided because their offset was hard-coded rather than measured from the
+    resolved font.
+- **`control.status()` gains `session_started_at` and `session_total`** —
+  the ring needs elapsed/total and only `session_remaining` was exposed. Derived
+  in `control.py` so no front-end does arithmetic on the session entity, and so
+  `extend` rescales the total instead of overshooting it. Both keys are
+  additive; nothing existing changed.
+- **Fonts are resolved, not bundled.** Mist wants Manrope + Instrument Serif;
+  the app falls back through Inter / Cantarell / Ubuntu / DejaVu Sans and
+  Charter / DejaVu Serif. *Why not vendor them:* `install.sh` runs as root and
+  would have to re-derive the real user's `HOME` to place fonts — the same
+  `pwd`/`chown` problem `autostart.py` already carries — and ~400KB of binary
+  sits badly in a repo whose headline feature is having nothing to install.
+
 ## 2026-08-15 — install: run from any folder, and an editable (`--link`) install
 
 - **`install.sh --link`** — an *editable install* (`pip install -e` equivalent):
