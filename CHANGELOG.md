@@ -2,6 +2,174 @@
 
 All notable changes to SocialBlocker. Newest first.
 
+## 2026-08-16 — Rounded cards, and the redraw bug they exposed
+
+- **Cards are rounded.** `mk.card()` now returns a themed **`ttk.Frame`** whose
+  background is the same 9-patch image element the buttons use, replacing the
+  `tk.Frame` + `highlightthickness` border — that border can only ever be a
+  rectangle. Children still pack and grid normally and the corners survive a
+  resize, which a canvas-drawn card would not give for free. Applied to every
+  card, not just the presets, so the surfaces stay one design language:
+  presets, mode, composer, list panel, stat tiles, startup.
+- Preset metadata is `50m · whitelist · locked` (single-spaced separators,
+  monospace) and the cards get a little more air.
+- **Fixed: resized widgets redrew over their own stale pixels.** The 9-patch
+  tiles had transparent corners, so Tk composited each redraw onto whatever
+  was already in the window instead of clearing it first. Harmless for a button
+  that never changes size; very visible on a card, which stretches — measured
+  on a live resize, the old narrower panel stayed visible underneath the new
+  one, and every card looked clipped on the right.
+  - *Fix:* every tile is now **opaque**, its corners painted against the colour
+    really behind the widget (cards against the page, buttons and fields
+    against the card). An opaque tile makes every redraw a full overwrite.
+    `pill_image()` takes `bg` as a required argument so this cannot be
+    forgotten; the transparent path is gone rather than left as a trap.
+  - This is the same trade the hero already made with `round_corners`. It costs
+    the "works on any background" property, which Tk could not actually honour.
+
+## 2026-08-15 — Title bar: drawn reload glyph, icon button, rounded status chip
+
+- **`mistkit.reload_icon()`** draws the circular arrow — a ring with a gap plus
+  an arrowhead, anti-aliased, one flat colour with an alpha channel. *Why not
+  "↻" (U+21BB):* it is present in some UI fonts and missing or badly matched in
+  others, it cannot follow the palette, and it cannot be recoloured per state.
+  The drawn glyph sits equally well on a white pill, the teal app tile and a
+  dark card. Used in the title bar and on the list panel's Refresh.
+- **The app mark now carries that glyph in white**, stamped into the teal tile
+  before the corners are cut.
+- **Refresh became an icon-only round button.** New `Icon.TButton`, and it
+  deliberately does *not* use the 9-patch the other buttons use:
+  a 9-patch reserves `border` pixels per side, which also become the label's
+  padding, so the smallest true circle it can draw is `2 * radius + icon`
+  across — measured, a 15px glyph at radius 17 gave a **49px** button, far too
+  heavy for a title bar. An icon button has one fixed size, so the image is
+  the whole face at natural size and nothing is stretched: **34x34**.
+- **`StatusPill` is a `tk.Canvas` instead of a `tk.Frame`** so it can actually
+  be round; `highlightthickness` only ever draws a rectangle. The panel image
+  depends solely on the width and there are five possible labels, so the few
+  widths that occur are cached rather than re-rasterised at 1 Hz.
+- The wordmark's "Blocker" is italic serif, matching the reference.
+
+## 2026-08-15 — Stop rewriting /etc/hosts on every daemon tick
+
+- **`hosts_engine.apply()` now skips the write when nothing changed.** It
+  rendered the region and called `_atomic_write` unconditionally, so the
+  5-second daemon loop replaced `/etc/hosts` ~17k times a day and ran a
+  resolver flush with each one. `os.replace` is atomic, so this was never a
+  corruption risk — but it is pure churn, it defeats any backup or file-watcher
+  that keys on mtime, and it destroyed the file's own mtime as the answer to
+  "when did my blocking last change?". *Measured before:* mtime advanced twice
+  in a 12-second window with an empty fence. *After:* three re-applies leave
+  the mtime untouched (now a test).
+  - The skip keys on **content**, never on "we already applied this", so
+    tamper repair is unchanged: edit or delete the region and the next tick
+    still writes it back. Covered by two new tests.
+- **`apply()` returns `Applied(mode, locked, count, changed)`** — a NamedTuple
+  instead of a bare 3-tuple. *Why the extra field:* once a write only happens
+  on a real change, `changed` is the only way to tell an idle no-op from a
+  repair, and the daemon now logs `repaired /etc/hosts — the managed region had
+  been modified`. That event was previously **invisible**: the daemon only logs
+  when its description string changes, and a repair does not change it. Tamper
+  repair is the headline feature of locked mode and it had no evidence.
+- `clear()` returns whether it removed anything, for the same reason.
+- Call sites widened in `cli.py` (5) and `daemon.py`; `arm_boot_session()` is
+  annotated `Applied | None`.
+
+## 2026-08-15 — GUI relaid out to the reference design
+
+- **Layout**: quick presets became three cards across the top; the all-day mode
+  and focus composer sit in a left column; both domain lists moved into one
+  right-hand card with count-badged tabs, an inline `add a domain…` field, and
+  Remove / Refresh. The `ttk.Notebook` is gone, and the boot-block settings are
+  a "Start with the computer" card at the foot of the page. Feature parity is
+  unchanged — every control still calls the same `control.py` use case.
+- **Rounded buttons, without hand-rolling a widget.** ttk cannot round a
+  button, and a canvas "button" means owning hover, press, focus and keyboard
+  traversal forever. Instead each style gets a **9-patch image element**
+  (`Style.element_create(..., "image", ..., border=N)`): one 28px RGBA tile per
+  widget state, stretched across any button width with the corners left alone.
+  Real `ttk.Button`s throughout, so focus and keyboard still work.
+  - `Raster` grew a real alpha channel and emits PNG colour type 6. A pill has
+    to sit on a card, the page *and* the fog, so its corners must be
+    transparent rather than painted with one assumed backdrop.
+  - *Trap:* clam's `TButton` sets `width: -11`, an 11-character minimum that
+    every derived style inherits — it made "Off" and "Blacklist" both exactly
+    140px. Fixed with `width=0`; measured after: 56px and 89px.
+  - The 9-patch `border` is *also* reserved as padding around the label, so
+    per-style padding is on top of it and had to shrink to match.
+- **`ttk.Treeview` replaces `tk.Listbox`** for the domain rows: it is the only
+  stock widget that can put an image on a row (the generated "blocked" mark),
+  and unlike Listbox it is themeable, so it follows a light/dark switch like
+  everything else.
+- **New `socialblocker/widgets.py`** — `PillGroup`, `Stepper`, `TabStrip`,
+  `DomainList`, `StatusPill`, `Scroller`. Same outer circle as `gui.py`:
+  imports nothing but `mistkit`, decides no policy, takes plain values and
+  callbacks. Split out purely for size.
+- Selection is ttk's own `selected` **state** rather than a style swap, so the
+  themed element picks its own face and the focus ring survives.
+- Scrollbars lost clam's stepper arrows, which rendered as two specks at 8px.
+- *Cost, measured:* a live theme switch is now **1038 ms** median, up from 649,
+  because the richer tree is more for Tk to lay out (`update_idletasks` alone
+  is 960 ms). Generating all the pill faces is 185 ms (Mist) / 271 ms (Ink),
+  but only once per scheme — a repeat `apply_theme` is 1.9 ms. See the note on
+  in-place retinting below; it is the fix if this hitch ever matters.
+
+## 2026-08-15 — GUI follows the system light/dark setting
+
+- **`mistkit.py` now ships two palettes: Mist (light) and Ink (dark).** The flat
+  token constants became a `Palette` object, with `mistkit.theme` naming the
+  active one. *Why an object and not 25 rebound module globals:* one binding is
+  one source of truth, `from mistkit import CARD` cannot silently capture a
+  stale colour, and `Palette` is pure arithmetic — testable without a Tk root.
+  - Ink is **not** an inversion of Mist. Elevation reverses (a shadow is
+    invisible on near-black, so a raised surface can only be a *lighter*
+    surface — which is why the "white" role is the lightest dark grey), and
+    accents are re-picked rather than reused (`TEAL_DEEP` means "more emphatic
+    than TEAL": darker on white, lighter on black). New `ON_ACCENT` role for
+    what is drawn *on* an accent fill, since white-on-teal only works on Mist.
+  - *Measured, not eyeballed:* contrast against each palette's own card —
+    PINE 15.1→13.5, SLATE 4.9→7.1, TEAL 3.7→6.5, AMBER 3.6→7.3, DANGER
+    4.9→5.0 (Mist→Ink). Ink is more contrasty at every role. Mist's own token
+    values are byte-identical to before; the light theme did not move.
+- **`mistkit.detect_scheme()`** — `SOCIALBLOCKER_THEME` override, then the XDG
+  portal (`org.freedesktop.appearance color-scheme`), then GNOME's `gsettings`
+  key, then the GTK theme name, then light. Every probe is a subprocess with a
+  1.5s timeout: a missing tool or a wedged session bus must never keep the
+  window from opening. *`Read`, not `ReadOne`* — ReadOne is the newer spelling
+  and is absent from portal builds still in the field (verified here).
+- **The GUI follows a theme change live**, polled every 10 ticks. *Why polling
+  and not a D-Bus signal subscription:* a subscription needs a long-lived
+  `gdbus monitor` child and a reader thread; the probe measures **6.7 ms
+  median / 10.4 ms worst**, which is under one frame, so a 10s poll is ~0.07%
+  of one core and cannot stall the UI thread.
+  - Tk bakes colours in at construction and has no restyle call, so a switch
+    rebuilds the widget tree. That is affordable because the window is a pure
+    function of `control.status()`; the composer's three inputs are the only
+    state not on disk and are carried across explicitly. *Cost, measured:*
+    **649 ms** (destroy 64 + build 158 + ring 83 + Tk layout/paint 337, the
+    last including the ~160 ms fog raster). A visible hitch on a rare,
+    deliberate action; the cheaper alternative is retinting the classic
+    widgets in place instead of rebuilding — not done, it needs a role
+    registry at every construction site.
+  - Verified read-only: three switches during a **locked** session left
+    `state.json` and the hosts file byte-identical, and `stop` stayed refused.
+- **Two latent Mist bugs surfaced by Ink and fixed** — both were silently
+  wrong all along and only *looked* right because clam's defaults are white:
+  - `indicatorcolor` **does not exist** on clam's checkbutton/radiobutton
+    indicator (its options are `indicatorbackground` / `indicatorforeground`),
+    so every indicator styling call since the Mist port had been a no-op and
+    every checkbox rendered `#ffffff` on Ink.
+  - `ttk.Notebook` left `bordercolor`/`lightcolor`/`darkcolor` unset, so clam
+    drew its own `#eeebe7` bevel around the tab client area.
+- **`gui.py`**: `Segment`'s `background=mk.SUNK` default argument was evaluated
+  at *import*, which would have frozen one palette forever — now resolved per
+  call. `Scroller.release()` added: its wheel handlers are `bind_all`, which
+  outlives the widget, so a rebuild would otherwise stack a second handler on a
+  destroyed canvas (verified: handler count stays at 1 across four switches).
+- **New `tests/test_palette.py`** (9 tests) — WCAG contrast floors per role per
+  palette, the elevation ordering, role parity between the two palettes, and
+  the detection fallback chain. No Tk root, no display, no root needed.
+
 ## 2026-08-15 — GUI: the "Mist" desktop look
 
 - **New `socialblocker/mistkit.py`** — the Mist design system as an outer-circle

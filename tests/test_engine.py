@@ -146,9 +146,9 @@ class EngineTest(unittest.TestCase):
         names = [p["name"] for p in control.list_presets()]
         self.assertIn("Deep Work", names)
 
-        mode, locked, n = control.start_preset("Deep Work")
-        self.assertEqual(mode, WHITELIST)
-        self.assertTrue(locked)
+        applied = control.start_preset("Deep Work")
+        self.assertEqual(applied.mode, WHITELIST)
+        self.assertTrue(applied.locked)
 
     def test_preset_minutes_override(self):
         control.start_preset("Sprint", minutes=5)
@@ -181,6 +181,48 @@ class EngineTest(unittest.TestCase):
         self.assertFalse(state.autostart.enabled)
         self.assertEqual(state.autostart.minutes, 300)
         self.assertEqual(state.session.source, MANUAL)
+
+    # ---- idempotency: the daemon re-applies every few seconds ----
+    def test_reapplying_an_unchanged_mode_does_not_touch_the_file(self):
+        """A no-op apply must not rewrite /etc/hosts.
+
+        The daemon calls apply() on a 5s loop; writing unconditionally replaced
+        the file ~17k times a day and ran a resolver flush with each one.
+        """
+        control.set_default_mode(BLACKLIST)
+        hosts = config.HOSTS_FILE
+        before = hosts.stat().st_mtime_ns
+        state = config.load_state()
+        for _ in range(3):
+            self.assertFalse(hosts_engine.apply(state).changed)
+        self.assertEqual(hosts.stat().st_mtime_ns, before)
+
+    def test_tampering_is_still_repaired(self):
+        """The skip must key on content, never on "we applied this already"."""
+        control.set_default_mode(BLACKLIST)
+        state = config.load_state()
+        hosts = config.HOSTS_FILE
+
+        # One line deleted from inside the region.
+        hosts.write_text(hosts.read_text().replace(f"{hosts_engine.SINK_IP}\treddit.com\n",
+                                                   "", 1), encoding="utf-8")
+        self.assertTrue(hosts_engine.apply(state).changed)
+        self.assertIn(f"{hosts_engine.SINK_IP}\treddit.com", hosts.read_text())
+        self.assertFalse(hosts_engine.apply(state).changed)   # settled again
+
+        # The whole region ripped out.
+        hosts.write_text("127.0.0.1\tlocalhost\n", encoding="utf-8")
+        self.assertTrue(hosts_engine.apply(state).changed)
+        self.assertIn(config.MARK_BEGIN, hosts.read_text())
+
+    def test_apply_never_disturbs_lines_outside_the_fence(self):
+        control.set_default_mode(BLACKLIST)
+        hosts = config.HOSTS_FILE
+        hosts.write_text("127.0.0.1\tlocalhost\n10.0.0.5\tnas.local\n"
+                         + (hosts_engine.current_block() or "") + "\n",
+                         encoding="utf-8")
+        hosts_engine.apply(config.load_state())
+        self.assertIn("10.0.0.5\tnas.local", hosts.read_text())
 
 
 class BootAutostartTest(unittest.TestCase):

@@ -237,11 +237,11 @@ def set_autostart(enabled: bool | None = None, minutes: int | None = None,
     return a
 
 
-def arm_boot_session() -> tuple[str, bool, int] | None:
+def arm_boot_session() -> hosts_engine.Applied | None:
     """Start the configured boot block, at most once per machine boot.
 
-    Called by the daemon at startup. Returns the applied (mode, locked, count),
-    or None when nothing was armed. Skipped when:
+    Called by the daemon at startup. Returns what was applied, or None when
+    nothing was armed. Skipped when:
       - autostart is off, or the boot identity is unknown (fail safe: never
         arm rather than risk arming repeatedly);
       - this boot was already handled (the `Restart=always` case);

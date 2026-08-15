@@ -38,9 +38,8 @@ def run(interval: int = 5) -> None:
     # session the user already stopped.
     armed = control.arm_boot_session()
     if armed is not None:
-        mode, locked, n = armed
         print(f"[socialblocker] {time.strftime('%H:%M:%S')} autostart armed "
-              f"{mode} locked={locked} n={n}", flush=True)
+              f"{armed.mode} locked={armed.locked} n={armed.count}", flush=True)
 
     try:
         while True:
@@ -50,13 +49,20 @@ def run(interval: int = 5) -> None:
                 print(f"[socialblocker] {time.strftime('%H:%M:%S')} "
                       f"focus session completed — logged", flush=True)
             state = config.load_state()
-            mode, locked, n = hosts_engine.apply(state)
-            desc = f"{mode} locked={locked} n={n} " \
+            done = hosts_engine.apply(state)
+            desc = f"{done.mode} locked={done.locked} n={done.count} " \
                    f"session_left={state.session.remaining()}"
             if desc != last_desc:
                 print(f"[socialblocker] {time.strftime('%H:%M:%S')} enforcing {desc}",
                       flush=True)
                 last_desc = desc
+            elif done.changed:
+                # Same policy, yet the file needed writing — something edited
+                # the managed region. This log line is the only evidence the
+                # user ever gets that tamper repair did its job.
+                print(f"[socialblocker] {time.strftime('%H:%M:%S')} repaired "
+                      f"/etc/hosts — the managed region had been modified "
+                      f"({desc})", flush=True)
             time.sleep(interval)
     except _Stop:
         print("[socialblocker] daemon stopping (leaving current rules in place)",

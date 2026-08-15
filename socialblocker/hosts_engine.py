@@ -17,12 +17,26 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 
 from . import config
 from .config import BLACKLIST, WHITELIST, OFF, HOSTS_FILE, MARK_BEGIN, MARK_END
 
 SINK_IP = "127.0.0.1"
 SINK_IP6 = "::1"
+
+
+class Applied(NamedTuple):
+    """What one `apply()` did.
+
+    `changed` is the interesting field: the daemon re-applies every few seconds,
+    so it is the only way to tell an idle no-op apart from an actual repair.
+    """
+
+    mode: str
+    locked: bool
+    count: int
+    changed: bool
 
 
 def _variants(domain: str) -> list[str]:
@@ -69,8 +83,19 @@ def _strip_existing(text: str) -> str:
     return (before.rstrip("\n") + "\n" + after.lstrip("\n")).lstrip("\n")
 
 
-def apply(state: config.State) -> tuple[str, bool, int]:
-    """Write the effective mode into /etc/hosts. Returns (mode, locked, count)."""
+def apply(state: config.State) -> Applied:
+    """Write the effective mode into /etc/hosts, if it is not already there.
+
+    Re-applying an unchanged mode is a no-op by design: the daemon calls this
+    every few seconds, so writing unconditionally would replace /etc/hosts
+    ~17k times a day and run a resolver flush with it. `os.replace` is atomic,
+    so that was never a corruption risk — but it is pure churn, it defeats any
+    file-watcher or backup that keys on mtime, and it destroys the file's own
+    mtime as the answer to "when did my blocking last change?".
+
+    Tamper repair is unaffected: if the region was edited or deleted, the
+    rendered text differs from what is on disk and the write still happens.
+    """
     mode, locked = state.effective()
     domains = domains_for_mode(state, mode)
 
@@ -84,18 +109,28 @@ def apply(state: config.State) -> tuple[str, bool, int]:
     else:
         new_text = base + _render_block(domains, mode, locked)
 
+    changed = _write_if_different(new_text, original)
+    return Applied(mode, locked, len(domains), changed)
+
+
+def clear() -> bool:
+    """Remove the SocialBlocker region entirely (used when turning off).
+
+    Returns whether anything was actually removed.
+    """
+    if not HOSTS_FILE.exists():
+        return False
+    text = HOSTS_FILE.read_text(encoding="utf-8")
+    return _write_if_different(_strip_existing(text), text)
+
+
+def _write_if_different(new_text: str, original: str) -> bool:
+    """Write and flush DNS only when the file would actually change."""
+    if new_text == original:
+        return False
     _atomic_write(HOSTS_FILE, new_text)
     _flush_dns_cache()
-    return mode, locked, len(domains)
-
-
-def clear() -> None:
-    """Remove the SocialBlocker region entirely (used when turning off)."""
-    if not HOSTS_FILE.exists():
-        return
-    text = HOSTS_FILE.read_text(encoding="utf-8")
-    _atomic_write(HOSTS_FILE, _strip_existing(text))
-    _flush_dns_cache()
+    return True
 
 
 def current_block() -> str | None:

@@ -190,8 +190,20 @@ Pick the all-day mode, start a focus session (with a length, whitelist/blacklist
 and the Locked checkbox), configure the boot block, and edit both lists live.
 
 The window uses the **Mist** look: a status hero with a live countdown ring,
-a segmented mode control, quick presets, and the focus stats. Colours, fonts
-and the generated art all live in `mistkit.py`.
+quick presets across the top, the all-day mode and focus composer on the left,
+and both domain lists in one tabbed card on the right. Colours, fonts and the
+generated art live in `mistkit.py`; the composite controls live in
+`widgets.py`.
+
+**Light and dark follow your desktop.** Mist is the light theme, **Ink** the
+dark one, and the app picks whichever your system is set to — via the XDG
+desktop portal, GNOME's `color-scheme`, or the GTK theme name, in that order.
+It keeps following: change the setting while the window is open and it
+repaints within ten seconds. To pin one theme regardless:
+
+```bash
+SOCIALBLOCKER_THEME=dark socialblocker gui      # or: light
+```
 
 > **Fonts (optional).** Mist is designed for **Manrope** (UI) and **Instrument
 > Serif** (headings). Nothing is bundled — the app falls back through
@@ -215,7 +227,9 @@ socialblocker/
   autostart.py     # the ~/.config/autostart .desktop entry (login, user-level)
   cli.py           # argparse CLI
   gui.py           # Tkinter GUI (the "Mist" look)
-  mistkit.py       # Mist design system: tokens, ttk theme, generated fog/ring art
+  widgets.py       # composite GUI controls: pills, stepper, tabs, domain list
+  mistkit.py       # design system: Mist/Ink palettes, scheme detection, ttk
+                   # theme, generated fog/ring/button art
 data/
   blocklist.json         # default blacklist (categorised)
   whitelist.example.json # example focus-session allow-list

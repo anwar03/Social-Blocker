@@ -71,7 +71,7 @@ def cmd_preset(args) -> None:
     if not args.name:
         sys.exit("usage: socialblocker preset start <name> [minutes]")
     try:
-        mode, locked, n = control.start_preset(args.name, minutes=args.minutes)
+        mode, locked, n, _ = control.start_preset(args.name, minutes=args.minutes)
     except (ValueError, LockedError) as e:
         sys.exit(str(e))
     lock = " (LOCKED — cannot be stopped early)" if locked else ""
@@ -81,7 +81,7 @@ def cmd_preset(args) -> None:
 def cmd_mode(args) -> None:
     _need_root()
     try:
-        mode, locked, n = control.set_default_mode(args.mode)
+        mode, locked, n, _ = control.set_default_mode(args.mode)
     except LockedError as e:
         sys.exit(str(e))
     print(f"Default mode set to '{args.mode}'. Enforcing '{mode}' "
@@ -92,8 +92,8 @@ def cmd_focus(args) -> None:
     _need_root()
     mode = BLACKLIST if args.blacklist else WHITELIST
     try:
-        m, locked, n = control.start_session(args.minutes, mode=mode,
-                                              locked=args.locked)
+        m, locked, n, _ = control.start_session(args.minutes, mode=mode,
+                                                 locked=args.locked)
     except (LockedError, ValueError) as e:
         sys.exit(str(e))
     lock = " (LOCKED — cannot be stopped early)" if locked else ""
@@ -104,7 +104,7 @@ def cmd_focus(args) -> None:
 def cmd_stop(args) -> None:
     _need_root()
     try:
-        mode, locked, n = control.stop_session()
+        mode, locked, n, _ = control.stop_session()
     except LockedError as e:
         sys.exit(str(e))
     print(f"Session stopped. Back to default '{mode}' ({n} domains blocked).")
@@ -153,7 +153,7 @@ def cmd_schedule(args) -> None:
 
 def cmd_refresh(args) -> None:
     _need_root()
-    mode, locked, n = control.refresh()
+    mode, locked, n, _ = control.refresh()
     print(f"Re-applied '{mode}' ({n} domains blocked).")
 
 

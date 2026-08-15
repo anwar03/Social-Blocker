@@ -10,9 +10,11 @@ unprivileged is the whole point — least privilege, and no DISPLAY/XAUTHORITY
 juggling. Launching the whole app with `sudo -E` still works and then skips
 pkexec entirely.
 
-The look is the "Mist" direction from SocialBlocker-Mist-Desktop.html. All of
-its colours, fonts and generated art live in `mistkit.py`; this module only
-decides *what* to show and calls `control.py` to change anything.
+The look is the "Mist" direction from SocialBlocker-Mist-Desktop.html, with
+"Ink" as its dark sibling. Which of the two is showing is the desktop's
+decision, followed live. All colours, fonts and generated art live in
+`mistkit.py`; this module only decides *what* to show and calls `control.py`
+to change anything.
 """
 
 from __future__ import annotations
@@ -22,9 +24,11 @@ import shutil
 import subprocess
 import sys
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox
 
 from . import autostart, config, control, mistkit as mk
+from .widgets import (DomainList, PillGroup, Scroller, StatusPill,
+                      Stepper, TabStrip)
 from .config import BLACKLIST, WHITELIST, OFF
 from .control import LockedError
 
@@ -111,30 +115,12 @@ MODE_DESC = {
 }
 
 
-# --- small composite widgets ----------------------------------------------
 
-class Segment(tk.Frame):
-    """The mockup's segmented control: buttons in a sunk track, selected white."""
-
-    def __init__(self, parent, options, command, background=mk.SUNK):
-        super().__init__(parent, background=background,
-                         highlightbackground=mk.LINE_SOFT,
-                         highlightcolor=mk.LINE_SOFT, highlightthickness=1, bd=0)
-        self.buttons = {}
-        for value, label in options:
-            b = ttk.Button(self, text=label, style="Seg.TButton",
-                           command=lambda v=value: command(v))
-            b.pack(side="left", expand=True, fill="x", padx=2, pady=2)
-            self.buttons[value] = b
-
-    def select(self, value) -> None:
-        for v, b in self.buttons.items():
-            b.configure(style="SegOn.TButton" if v == value else "Seg.TButton")
-
+# --- cards -----------------------------------------------------------------
 
 def card_label(parent, text, hint=None):
     """The uppercase card heading, with an optional right-aligned hint."""
-    row = tk.Frame(parent, background=mk.CARD)
+    row = tk.Frame(parent, background=mk.theme.CARD)
     row.pack(fill="x", pady=(0, 12))
     ttk.Label(row, text=mk.track(text.upper()),
               style="Eyebrow.Card.TLabel").pack(side="left")
@@ -143,59 +129,77 @@ def card_label(parent, text, hint=None):
     return row
 
 
-class Composer(tk.Frame):
-    """The focus-session composer card: duration, mode, lock, Start.
+def section_label(parent, text, fonts):
+    """A heading for a group of cards, sitting on the page rather than in one."""
+    tk.Label(parent, text=mk.track(text.upper()), background=mk.theme.SUNK,
+             foreground=mk.theme.SLATE, font=fonts.eyebrow, anchor="w"
+             ).pack(fill="x", pady=(18, 9))
+
+
+class PresetCard(ttk.Frame):
+    """One preset as a whole-card button: name, then its settings as data.
+
+    The metadata line is monospace on purpose — "50m · whitelist · locked" is
+    three fields, not a sentence, and a fixed pitch makes three cards side by
+    side scan as a table.
+    """
+
+    def __init__(self, parent, preset, fonts, command):
+        super().__init__(parent, style=mk.CARD_STYLE, padding=(17, 15))
+        self._command, self._preset = command, preset
+        name = tk.Label(self, text=preset.get("name", "?"), anchor="w",
+                        background=mk.theme.CARD, foreground=mk.theme.PINE,
+                        font=fonts.ui_bold)
+        name.pack(fill="x")
+        bits = [f"{preset.get('default_minutes', '?')}m", preset.get("mode", "")]
+        if preset.get("locked"):
+            bits.append("locked")
+        meta = tk.Label(self, text=" · ".join(b for b in bits if b), anchor="w",
+                        background=mk.theme.CARD, foreground=mk.theme.SLATE,
+                        font=fonts.mono_small)
+        meta.pack(fill="x", pady=(5, 0))
+        for widget in (self, name, meta):
+            widget.bind("<Button-1>", self._click)
+            widget.bind("<Enter>", lambda _e: self._hover(True))
+            widget.bind("<Leave>", lambda _e: self._hover(False))
+
+    def _hover(self, on: bool) -> None:
+        # A ttk.Frame has no widget states, so the whole style is swapped —
+        # both are prebuilt, so this is a pointer change, not a re-render.
+        self.configure(style=mk.CARD_HOVER_STYLE if on else mk.CARD_STYLE)
+
+    def _click(self, _event=None) -> None:
+        self._command(self._preset)
+
+
+class Composer(ttk.Frame):
+    """The focus-session composer: duration, mode, lock, Start.
 
     Owns its own input state and turns it into exactly one use-case call.
     `run` is the caller's elevate-and-apply helper.
     """
 
     def __init__(self, parent, fonts, run):
-        super().__init__(parent, **mk.card_options())
+        super().__init__(parent, style=mk.CARD_STYLE, padding=16)
         self._run = run
         self.minutes = tk.StringVar(value="90")
         self.mode = tk.StringVar(value=WHITELIST)
         self.locked = tk.BooleanVar(value=False)
         card_label(self, "Focus session")
-        self._build_stepper()
-        self._build_chips()
-        self.seg = Segment(self, ((WHITELIST, "Whitelist"), (BLACKLIST, "Blacklist")),
-                           self.set_mode, background=mk.CARD)
-        self.seg.pack(fill="x", pady=(0, 12))
-        self.seg.select(WHITELIST)
-        self._build_lock()
-        ttk.Button(self, text="Start focus session", style="Primary.TButton",
-                   command=self.start).pack(fill="x")
 
-    def _build_stepper(self) -> None:
-        row = tk.Frame(self, background=mk.CARD)
-        row.pack(fill="x", pady=(0, 10))
-        ttk.Label(row, text="Duration", style="Muted.Card.TLabel").pack(side="left")
-        track = tk.Frame(row, background=mk.SUNK, highlightbackground=mk.LINE_SOFT,
-                         highlightthickness=1, bd=0)
-        track.pack(side="right")
-        ttk.Button(track, text="−", width=2, style="Step.TButton",
-                   command=lambda: self._nudge(-5)).pack(side="left", padx=3, pady=3)
-        ttk.Entry(track, textvariable=self.minutes, width=4,
-                  justify="center").pack(side="left")
-        ttk.Button(track, text="+", width=2, style="Step.TButton",
-                   command=lambda: self._nudge(5)).pack(side="left", padx=3, pady=3)
-
-    def _build_chips(self) -> None:
-        row = tk.Frame(self, background=mk.CARD)
-        row.pack(fill="x", pady=(0, 12))
-        for minutes in (25, 45, 90, 120):
-            ttk.Button(row, text=f"{minutes}m", style="Chip.TButton",
-                       command=lambda m=minutes: self.minutes.set(str(m))
-                       ).pack(side="left", expand=True, fill="x", padx=2)
-
-    def _build_lock(self) -> None:
-        row = tk.Frame(self, background=mk.CARD)
+        row = tk.Frame(self, background=mk.theme.CARD)
         row.pack(fill="x", pady=(0, 14))
-        ttk.Checkbutton(row, text="🔒 Locked", variable=self.locked,
-                        style="Lock.Card.TCheckbutton").pack(side="left")
-        ttk.Label(row, text="can't stop early",
-                  style="Faint.Card.TLabel").pack(side="left", padx=8)
+        Stepper(row, self.minutes, self._nudge, fonts).pack(side="left")
+        self.pills = PillGroup(row, ((WHITELIST, "Whitelist"),
+                                     (BLACKLIST, "Blacklist")), self.set_mode)
+        self.pills.pack(side="left", padx=(10, 0))
+        self.pills.select(WHITELIST)
+
+        ttk.Checkbutton(self, text="Lock session (can't stop early)",
+                        variable=self.locked, style="Card.TCheckbutton"
+                        ).pack(anchor="w", pady=(0, 14))
+        ttk.Button(self, text="Start focus", style="Primary.TButton",
+                   command=self.start).pack(fill="x")
 
     def _nudge(self, delta: int) -> None:
         try:
@@ -206,13 +210,13 @@ class Composer(tk.Frame):
 
     def set_mode(self, mode: str) -> None:
         self.mode.set(mode)
-        self.seg.select(mode)
+        self.pills.select(mode)
 
-    def apply_preset(self, p: dict) -> None:
+    def apply_preset(self, preset: dict) -> None:
         """Pre-fill from a preset; the user still presses Start."""
-        self.minutes.set(str(p.get("default_minutes", 25)))
-        self.set_mode(p.get("mode", WHITELIST))
-        self.locked.set(bool(p.get("locked", False)))
+        self.minutes.set(str(preset.get("default_minutes", 25)))
+        self.set_mode(preset.get("mode", WHITELIST))
+        self.locked.set(bool(preset.get("locked", False)))
 
     def start(self) -> None:
         try:
@@ -233,66 +237,93 @@ class Composer(tk.Frame):
         self._run(lambda: control.start_session(minutes, mode=mode, locked=locked), args)
 
 
-class StatusPill(tk.Frame):
-    """Title-bar state chip: a coloured dot plus one word."""
+class ListPanel(ttk.Frame):
+    """Both domain lists in one card: tabs, rows, and the edit controls.
 
-    def __init__(self, parent, fonts):
-        super().__init__(parent, background=mk.WHITE, bd=0,
-                         highlightbackground=mk.LINE, highlightcolor=mk.LINE,
-                         highlightthickness=1, padx=10, pady=4)
-        self._dot = tk.Canvas(self, width=9, height=9, background=mk.WHITE,
-                              highlightthickness=0, bd=0)
-        self._blob = self._dot.create_oval(0, 0, 8, 8, outline="", fill=mk.TEAL)
-        self._dot.pack(side="left", padx=(0, 7))
-        self._text = tk.StringVar(value="…")
-        tk.Label(self, textvariable=self._text, background=mk.WHITE,
-                 foreground=mk.PINE, font=fonts.small_bold).pack(side="left")
-
-    def render(self, st: dict) -> None:
-        if st["locked"]:
-            label, colour = "Locked", mk.AMBER
-        elif st["session_active"]:
-            label, colour = "Focusing", mk.TEAL
-        elif st["effective_mode"] == OFF:
-            label, colour = "Off", mk.SLATE_2
-        else:
-            label, colour = st["effective_mode"].title(), mk.TEAL
-        self._text.set(label)
-        self._dot.itemconfigure(self._blob, fill=colour)
-
-
-class Scroller(tk.Frame):
-    """A vertically scrollable body.
-
-    The full Mist layout is taller than a 768px laptop screen, so the window
-    stays usable by scrolling rather than by cutting sections.
+    `run` and `refresh` are injected the same way the other cards get them —
+    this panel calls use cases, it never elevates anything itself.
     """
 
-    def __init__(self, parent):
-        super().__init__(parent, background=mk.SUNK)
-        self.canvas = tk.Canvas(self, background=mk.SUNK, highlightthickness=0, bd=0)
-        bar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
-        self.canvas.configure(yscrollcommand=bar.set)
-        bar.pack(side="right", fill="y")
-        self.canvas.pack(side="left", fill="both", expand=True)
-        self.inner = tk.Frame(self.canvas, background=mk.SUNK)
-        self._win = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
-        self.inner.bind("<Configure>", lambda e: self.canvas.configure(
-            scrollregion=self.canvas.bbox("all")))
-        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(
-            self._win, width=e.width))
-        for seq in ("<Button-4>", "<Button-5>", "<MouseWheel>"):
-            self.canvas.bind_all(seq, self._on_wheel)
-        # Building the page leaves the view wherever the last child landed
-        # (measured: 0.127 down, i.e. the bottom). A page opens at the top.
-        self.after_idle(lambda: self.canvas.yview_moveto(0.0))
+    PLACEHOLDER = "add a domain…"
 
-    def _on_wheel(self, event) -> None:
-        # Leave the domain lists their own wheel; only the page scrolls here.
-        if isinstance(event.widget, tk.Listbox):
+    def __init__(self, parent, fonts, run, refresh):
+        super().__init__(parent, style=mk.CARD_STYLE, padding=16)
+        self._run, self._refresh, self._fonts = run, refresh, fonts
+        self.which = "block"
+        self.tabs = TabStrip(self, (("block", "Blacklist"), ("allow", "Whitelist")),
+                             self.show, fonts)
+        self.tabs.pack(fill="x", pady=(0, 4))
+        self.rows = DomainList(self, fonts, height=8)
+        self.rows.pack(fill="both", expand=True)
+        self._build_controls(fonts)
+        self.tabs.select(self.which)
+
+    def _build_controls(self, fonts) -> None:
+        add = tk.Frame(self, background=mk.theme.CARD)
+        add.pack(fill="x", pady=(12, 0))
+        self.entry = ttk.Entry(add, style="Mono.TEntry")
+        self.entry.pack(side="left", fill="x", expand=True)
+        self.entry.bind("<Return>", lambda _e: self._add())
+        self.entry.bind("<FocusIn>", self._clear_placeholder)
+        self.entry.bind("<FocusOut>", self._show_placeholder)
+        self._show_placeholder()
+        ttk.Button(add, text="Add", style="Primary.TButton",
+                   command=self._add).pack(side="left", padx=(8, 0))
+
+        buttons = tk.Frame(self, background=mk.theme.CARD)
+        buttons.pack(fill="x", pady=(10, 0))
+        ttk.Button(buttons, text="Remove", style="Danger.TButton",
+                   command=self._remove).pack(side="left")
+        self._reload = mk.reload_icon(13, mk.theme.PINE)
+        ttk.Button(buttons, text=" Refresh", image=self._reload,
+                   compound="left", style="Ghost.TButton",
+                   command=self._refresh).pack(side="left", padx=(8, 0))
+
+    # ---- placeholder: ttk.Entry has no such option, so it is done by hand ----
+    def _showing_placeholder(self) -> bool:
+        return self.entry.get() == self.PLACEHOLDER
+
+    def _clear_placeholder(self, _event=None) -> None:
+        if self._showing_placeholder():
+            self.entry.delete(0, tk.END)
+            self.entry.configure(foreground=mk.theme.PINE)
+
+    def _show_placeholder(self, _event=None) -> None:
+        if not self.entry.get():
+            self.entry.insert(0, self.PLACEHOLDER)
+            self.entry.configure(foreground=mk.theme.SLATE_2)
+
+    # ---- use cases ----
+    def show(self, which: str) -> None:
+        self.which = which
+        self.tabs.select(which)
+        self.render(config.load_state())
+
+    def render(self, state) -> None:
+        self.tabs.set_count("block", len(state.blocklist))
+        self.tabs.set_count("allow", len(state.whitelist))
+        items = state.blocklist if self.which == "block" else state.whitelist
+        self.rows.fill(sorted(items))
+
+    def _add(self) -> None:
+        domain = "" if self._showing_placeholder() else self.entry.get().strip()
+        if not domain:
             return
-        up = getattr(event, "num", 0) == 4 or getattr(event, "delta", 0) > 0
-        self.canvas.yview_scroll(-1 if up else 1, "units")
+        add = (control.add_to_blocklist if self.which == "block"
+               else control.add_to_whitelist)
+        self._run(lambda: add([domain]), [self.which, "add", domain])
+        self.entry.delete(0, tk.END)
+        self._show_placeholder()
+
+    def _remove(self) -> None:
+        domain = self.rows.selected()
+        if not domain:
+            messagebox.showinfo("Nothing selected",
+                                "Pick a domain in the list first.")
+            return
+        drop = (control.remove_from_blocklist if self.which == "block"
+                else control.remove_from_whitelist)
+        self._run(lambda: drop([domain]), [self.which, "remove", domain])
 
 
 class Hero(tk.Canvas):
@@ -308,10 +339,10 @@ class Hero(tk.Canvas):
     RADIUS = 8          # at half-resolution, so 16px once zoomed back up
 
     def __init__(self, parent, fonts, on_extend, on_stop):
-        super().__init__(parent, height=self.HEIGHT, background=mk.SUNK,
+        super().__init__(parent, height=self.HEIGHT, background=mk.theme.SUNK,
                          highlightthickness=0, bd=0)
         self.fonts = fonts
-        self._fog = mk.Fog(900, self.HEIGHT, mk.Fog.PANEL_TOP, mk.Fog.PANEL_BOT)
+        self._fog = mk.Fog(900, self.HEIGHT, mk.theme.PANEL_TOP, mk.theme.PANEL_BOT)
         self._art = mk.RingArt(self._fog, self.RING)
         self._bg_photo = None            # both kept alive; Tk does not own images
         self._ring_photo = None
@@ -325,16 +356,16 @@ class Hero(tk.Canvas):
     def _build(self, on_extend, on_stop) -> None:
         f, pad = self.fonts, self.PAD
         self.create_image(0, 0, anchor="nw", image=self._bg_photo, tags="bg")
-        self._eyebrow = self.create_text(pad, 28, anchor="w", fill=mk.SLATE,
+        self._eyebrow = self.create_text(pad, 28, anchor="w", fill=mk.theme.SLATE,
                                          font=f.eyebrow)
-        self._lock = self.create_text(pad, 28, anchor="w", fill=mk.AMBER,
+        self._lock = self.create_text(pad, 28, anchor="w", fill=mk.theme.AMBER,
                                       font=f.eyebrow, text=mk.track("LOCKED"))
-        self._title = self.create_text(pad, 64, anchor="w", fill=mk.PINE, font=f.h1)
-        self._sub = self.create_text(pad, 96, anchor="nw", fill=mk.SLATE,
+        self._title = self.create_text(pad, 64, anchor="w", fill=mk.theme.PINE, font=f.h1)
+        self._sub = self.create_text(pad, 96, anchor="nw", fill=mk.theme.SLATE,
                                      font=f.small, width=380)
         self._ring = self.create_image(0, 0, anchor="nw")
-        self._value = self.create_text(0, 0, fill=mk.PINE, font=f.ring)
-        self._cap = self.create_text(0, 0, fill=mk.SLATE, font=f.eyebrow)
+        self._value = self.create_text(0, 0, fill=mk.theme.PINE, font=f.ring)
+        self._cap = self.create_text(0, 0, fill=mk.theme.SLATE, font=f.eyebrow)
         self._extend_btn = ttk.Button(self, text="+15 min", style="Ghost.TButton",
                                       command=on_extend)
         self._stop_btn = ttk.Button(self, text="Stop", style="Danger.TButton",
@@ -381,9 +412,9 @@ class Hero(tk.Canvas):
         """
         self._resize_job = None
         self._fog = mk.Fog(self._width, self.HEIGHT,
-                           mk.Fog.PANEL_TOP, mk.Fog.PANEL_BOT)
+                           mk.theme.PANEL_TOP, mk.theme.PANEL_BOT)
         field = self._fog.raster(0, 0, self._width, self.HEIGHT, step=2)
-        field.round_corners(self.RADIUS, mk.FOG_TOP_RGB)
+        field.round_corners(self.RADIUS, mk.theme.FOG_TOP_RGB)
         self._bg_photo = field.photo().zoom(2)
         self.itemconfigure("bg", image=self._bg_photo)
         self._art = mk.RingArt(self._fog, self.RING)    # its backdrop moved
@@ -423,7 +454,7 @@ class Hero(tk.Canvas):
             self.itemconfigure(self._cap, text=mk.track("BLOCKED"))
 
 
-class StartupPanel(tk.Frame):
+class StartupPanel(ttk.Frame):
     """The "start with the computer" settings, as a tab.
 
     `run` is the caller's elevate-and-apply helper — this panel never talks to
@@ -431,7 +462,7 @@ class StartupPanel(tk.Frame):
     """
 
     def __init__(self, parent, fonts, run):
-        super().__init__(parent, background=mk.CARD, padx=16, pady=14)
+        super().__init__(parent, style=mk.CARD_STYLE, padding=(17, 15))
         self._run = run
         self.enabled = tk.BooleanVar(value=False)
         self.minutes = tk.StringVar(value="300")
@@ -442,7 +473,7 @@ class StartupPanel(tk.Frame):
         self._build(fonts)
 
     def _build(self, fonts) -> None:
-        row = tk.Frame(self, background=mk.CARD)
+        row = tk.Frame(self, background=mk.theme.CARD)
         row.pack(fill="x")
         ttk.Checkbutton(row, text="Block at every boot for", variable=self.enabled,
                         style="Card.TCheckbutton").pack(side="left")
@@ -452,7 +483,7 @@ class StartupPanel(tk.Frame):
         ttk.Button(row, text="Save", style="Primary.TButton",
                    command=self._save).pack(side="right")
 
-        row2 = tk.Frame(self, background=mk.CARD)
+        row2 = tk.Frame(self, background=mk.theme.CARD)
         row2.pack(fill="x", pady=(12, 0))
         for value, label in ((BLACKLIST, "Blacklist"), (WHITELIST, "Whitelist")):
             ttk.Radiobutton(row2, text=label, value=value, variable=self.mode,
@@ -460,7 +491,7 @@ class StartupPanel(tk.Frame):
         ttk.Checkbutton(row2, text="🔒 Locked", variable=self.locked,
                         style="Lock.Card.TCheckbutton").pack(side="left")
 
-        row3 = tk.Frame(self, background=mk.CARD)
+        row3 = tk.Frame(self, background=mk.theme.CARD)
         row3.pack(fill="x", pady=(16, 0))
         ttk.Label(row3, textvariable=self.service,
                   style="Muted.Card.TLabel").pack(side="left")
@@ -530,18 +561,15 @@ class StartupPanel(tk.Frame):
 class App(tk.Tk):
 
     STATS_EVERY = 10        # ticks between the (more expensive) stats refresh
+    THEME_EVERY = 10        # ticks between desktop colour-scheme checks
 
     def __init__(self):
         super().__init__()
         self.title("SocialBlocker")
-        self.fonts = mk.apply_theme(self)
         self._size_window()
         self._ticks = 0
-
-        self._build_topbar()
-        body = Scroller(self)
-        body.pack(fill="both", expand=True)
-        self._build_body(body.inner)
+        self._scheme = mk.detect_scheme()
+        self._build_ui()
 
         # Unprivileged is the normal case now (pkexec elevates each change), so
         # only warn when there is no way to elevate at all.
@@ -551,81 +579,128 @@ class App(tk.Tk):
                 "Changes edit /etc/hosts, which needs admin rights, and pkexec "
                 "is not installed.\n\nInstall policykit-1, or relaunch with:\n"
                 "  sudo -E socialblocker gui"))
-
-        self._render_lists()
-        self.startup.render()
         self._tick()
 
     def _size_window(self) -> None:
         """Fit the screen rather than assuming a desktop-sized one."""
         height = min(900, self.winfo_screenheight() - 120)
-        self.geometry(f"900x{height}")
-        self.minsize(820, 460)
+        self.geometry(f"940x{height}")
+        self.minsize(860, 460)
+
+    def _build_ui(self) -> None:
+        """Style, then build the whole window and fill it from disk."""
+        self.fonts = mk.apply_theme(self, self._scheme)
+        self._build_topbar()
+        self.body = Scroller(self)
+        self.body.pack(fill="both", expand=True)
+        self._build_body(self.body.inner)
+        self._render_lists()
+        self.startup.render()
+        st = control.status()
+        self._render_status(st)
+        # Explicitly, not left to the tick: on a rebuild the tick counter is
+        # mid-cycle, so the stat tiles would sit on "—" for up to 10 seconds.
+        self._render_stats(st)
+
+    def _restyle(self, scheme: str) -> None:
+        """Rebuild the window in the other colour scheme.
+
+        Tk bakes a widget's colours in at construction and has no restyle call,
+        so a live theme change means a new widget tree whichever way you cut it.
+        That is affordable because the window is a pure function of
+        `control.status()` — the composer's three inputs and the open list tab
+        are the only state that is not on disk, so they are what is carried.
+        """
+        self._scheme = scheme
+        carried = (self.composer.minutes.get(), self.composer.mode.get(),
+                   self.composer.locked.get(), self.lists.which)
+        self.body.release()
+        for child in self.winfo_children():
+            child.destroy()
+        self._build_ui()
+        self.composer.minutes.set(carried[0])
+        self.composer.set_mode(carried[1])
+        self.composer.locked.set(carried[2])
+        self.lists.show(carried[3])
 
     # ---- layout ----
     def _build_topbar(self) -> None:
-        bar = tk.Frame(self, background=mk.CARD, padx=18, pady=11,
-                       highlightbackground=mk.LINE_SOFT, highlightthickness=1, bd=0)
+        bar = tk.Frame(self, background=mk.theme.CARD, padx=18, pady=11,
+                       highlightbackground=mk.theme.LINE_SOFT,
+                       highlightthickness=1, bd=0)
         bar.pack(fill="x")
-        self._mark = mk.mark_image(26, mk.CARD_RGB)
-        tk.Label(bar, image=self._mark, background=mk.CARD).pack(side="left")
-        tk.Label(bar, text="Social", background=mk.CARD, foreground=mk.PINE,
+        self._mark = mk.mark_image(28, mk._rgb(mk.theme.CARD))
+        tk.Label(bar, image=self._mark, background=mk.theme.CARD).pack(side="left")
+        tk.Label(bar, text="Social", background=mk.theme.CARD,
+                 foreground=mk.theme.PINE,
                  font=self.fonts.ui_bold).pack(side="left", padx=(10, 0))
-        tk.Label(bar, text="Blocker", background=mk.CARD, foreground=mk.TEAL_DEEP,
+        tk.Label(bar, text="Blocker", background=mk.theme.CARD,
+                 foreground=mk.theme.TEAL_DEEP,
                  font=self.fonts.mark).pack(side="left")
-        ttk.Button(bar, text="Refresh", style="Ghost.TButton",
-                   command=self._refresh).pack(side="right")
+        # Icon-only: the mark, the wordmark and the status chip already fill
+        # this bar, and "Refresh" is the one action here — a label adds width
+        # without adding meaning.
+        self._reload = mk.reload_icon(15, mk.theme.PINE)
+        refresh = ttk.Button(bar, image=self._reload, style="Icon.TButton",
+                             command=self._refresh)
+        refresh.pack(side="right")
         self.pill = StatusPill(bar, self.fonts)
         self.pill.pack(side="right", padx=12)
 
     def _build_body(self, parent) -> None:
         parent.configure(padx=18, pady=16)
-        self.hero = Hero(parent, self.fonts, lambda: self._extend(15), self._stop_focus)
+        self.hero = Hero(parent, self.fonts, lambda: self._extend(15),
+                         self._stop_focus)
         self.hero.pack(fill="x")
-        self._build_mode_card(parent)
-        columns = tk.Frame(parent, background=mk.SUNK)
+        self._build_presets(parent)
+
+        columns = tk.Frame(parent, background=mk.theme.SUNK)
         columns.pack(fill="x", pady=(14, 0))
         columns.columnconfigure(0, weight=1, uniform="col")
         columns.columnconfigure(1, weight=1, uniform="col")
-        self.composer = Composer(columns, self.fonts, self._do)
-        self.composer.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
-        self._build_presets(columns)      # after the composer: presets fill it
+        left = tk.Frame(columns, background=mk.theme.SUNK)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
+        self._build_mode_card(left)
+        self.composer = Composer(left, self.fonts, self._do)
+        self.composer.pack(fill="x", pady=(14, 0))
+        self.lists = ListPanel(columns, self.fonts, self._do, self._refresh)
+        self.lists.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
+
         self._build_stats(parent)
-        self._build_tabs(parent)
+        self._build_startup(parent)
+
+    def _build_presets(self, parent) -> None:
+        section_label(parent, "Quick presets", self.fonts)
+        row = tk.Frame(parent, background=mk.theme.SUNK)
+        row.pack(fill="x")
+        presets = control.list_presets()
+        if not presets:
+            tk.Label(row, text="No presets in data/presets.json.",
+                     background=mk.theme.SUNK, foreground=mk.theme.SLATE,
+                     font=self.fonts.small).pack(anchor="w")
+            return
+        for i, preset in enumerate(presets):
+            row.columnconfigure(i, weight=1, uniform="preset")
+            # preset=preset binds this one (avoids the late-binding closure bug).
+            card = PresetCard(row, preset, self.fonts,
+                              lambda p=preset: self.composer.apply_preset(p))
+            card.grid(row=0, column=i, sticky="nsew",
+                      padx=(0 if i == 0 else 7, 0 if i == len(presets) - 1 else 7))
 
     def _build_mode_card(self, parent) -> None:
         card = mk.card(parent)
-        card.pack(fill="x", pady=(14, 0))
-        card_label(card, "All-day default mode",
-                   "what runs when no focus session is active")
-        self.mode_seg = Segment(card, ((BLACKLIST, "Blacklist"),
-                                       (WHITELIST, "Whitelist"),
-                                       (OFF, "Off")), self._set_mode)
-        self.mode_seg.pack(fill="x")
+        card.pack(fill="x")
+        card_label(card, "All-day default mode")
+        self.mode_pills = PillGroup(card, ((BLACKLIST, "Blacklist"),
+                                           (WHITELIST, "Whitelist"),
+                                           (OFF, "Off")), self._set_mode)
+        self.mode_pills.pack(fill="x")
         self.mode_desc = tk.StringVar(value="")
         ttk.Label(card, textvariable=self.mode_desc, style="Muted.Card.TLabel",
-                  wraplength=760, justify="left").pack(fill="x", pady=(11, 0))
-
-    def _build_presets(self, parent) -> None:
-        card = mk.card(parent)
-        card.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
-        card_label(card, "Quick presets", "pre-fills the composer")
-        presets = control.list_presets()
-        if not presets:
-            ttk.Label(card, text="No presets in data/presets.json.",
-                      style="Muted.Card.TLabel").pack(anchor="w")
-            return
-        for p in presets:
-            lock = "  🔒" if p.get("locked") else ""
-            label = (f"{p.get('name', '')}\n{p.get('default_minutes', '?')} min · "
-                     f"{p.get('mode', WHITELIST)}{lock}")
-            # p=p binds the current preset (avoids the late-binding closure bug).
-            ttk.Button(card, text=label, style="Preset.TButton",
-                       command=lambda p=p: self.composer.apply_preset(p)
-                       ).pack(fill="x", pady=3)
+                  wraplength=380, justify="left").pack(fill="x", pady=(12, 0))
 
     def _build_stats(self, parent) -> None:
-        row = tk.Frame(parent, background=mk.SUNK)
+        row = tk.Frame(parent, background=mk.theme.SUNK)
         row.pack(fill="x", pady=(14, 0))
         self.stat_vars = {}
         specs = (("focused_today_min", "Focused today", "min"),
@@ -634,11 +709,11 @@ class App(tk.Tk):
         for i, (key, title, unit) in enumerate(specs):
             row.columnconfigure(i, weight=1, uniform="stat")
             card = mk.card(row, pad=13)
-            card.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 7,
-                                                            0 if i == 2 else 7))
+            card.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 6,
+                                                            0 if i == 2 else 6))
             ttk.Label(card, text=mk.track(title.upper()),
                       style="Eyebrow.Card.TLabel").pack(anchor="w")
-            value = tk.Frame(card, background=mk.CARD)
+            value = tk.Frame(card, background=mk.theme.CARD)
             value.pack(anchor="w", pady=(8, 0))
             var = tk.StringVar(value="—")
             ttk.Label(value, textvariable=var,
@@ -647,31 +722,10 @@ class App(tk.Tk):
                                                                       padx=(5, 0))
             self.stat_vars[key] = var
 
-    def _build_tabs(self, parent) -> None:
-        nb = ttk.Notebook(parent)
-        nb.pack(fill="both", expand=True, pady=(14, 0))
-        self.block_list = self._make_list_tab(nb, "Blacklist", "block")
-        self.allow_list = self._make_list_tab(nb, "Whitelist", "allow")
-        self.startup = StartupPanel(nb, self.fonts, self._do)
-        nb.add(self.startup, text="Startup")
-
-    def _make_list_tab(self, nb, title, which):
-        frame = tk.Frame(nb, background=mk.CARD, padx=14, pady=14)
-        nb.add(frame, text=title)
-        lb = tk.Listbox(frame, height=7)
-        mk.style_listbox(lb, self.fonts)
-        lb.pack(fill="both", expand=True, side="left")
-        sb = ttk.Scrollbar(frame, command=lb.yview)
-        sb.pack(side="left", fill="y", padx=(2, 0))
-        lb.config(yscrollcommand=sb.set)
-
-        btns = tk.Frame(frame, background=mk.CARD, padx=12)
-        btns.pack(side="left", fill="y")
-        ttk.Button(btns, text="Add", style="Ghost.TButton",
-                   command=lambda: self._add_domain(which)).pack(fill="x", pady=3)
-        ttk.Button(btns, text="Remove", style="Ghost.TButton",
-                   command=lambda: self._remove_domain(which, lb)).pack(fill="x", pady=3)
-        return lb
+    def _build_startup(self, parent) -> None:
+        section_label(parent, "Start with the computer", self.fonts)
+        self.startup = StartupPanel(parent, self.fonts, self._do)
+        self.startup.pack(fill="x")
 
     # ---- actions ----
     def _set_mode(self, mode) -> None:
@@ -691,23 +745,8 @@ class App(tk.Tk):
                 f"({after['default_mode']}), so those sites are still blocked.\n\n"
                 f"Press 'Off' above if you want everything unblocked.")
 
-    def _extend(self, m) -> None:
-        self._do(lambda: control.extend_session(m), ["extend", str(m)])
-
-    def _add_domain(self, which) -> None:
-        d = simpledialog.askstring("Add domain", "Domain (e.g. reddit.com):", parent=self)
-        if not d:
-            return
-        fn = control.add_to_blocklist if which == "block" else control.add_to_whitelist
-        self._do(lambda: fn([d]), [which, "add", d])
-
-    def _remove_domain(self, which, lb) -> None:
-        sel = lb.curselection()
-        if not sel:
-            return
-        d = lb.get(sel[0])
-        fn = control.remove_from_blocklist if which == "block" else control.remove_from_whitelist
-        self._do(lambda: fn([d]), [which, "remove", d])
+    def _extend(self, minutes) -> None:
+        self._do(lambda: control.extend_session(minutes), ["extend", str(minutes)])
 
     def _refresh(self) -> None:
         self._do(control.refresh, ["refresh"])
@@ -733,9 +772,9 @@ class App(tk.Tk):
 
     # ---- render / tick ----
     def _render_status(self, st: dict) -> None:
-        self.pill.render(st)
+        self.pill.render(*_pill_state(st))
         self.hero.render(st)
-        self.mode_seg.select(st["default_mode"])
+        self.mode_pills.select(st["default_mode"])
         self.mode_desc.set(MODE_DESC.get(st["default_mode"], ""))
 
     def _render_stats(self, st: dict) -> None:
@@ -743,12 +782,7 @@ class App(tk.Tk):
             var.set(str(st[key]))
 
     def _render_lists(self) -> None:
-        state = config.load_state()
-        for lb, items in ((self.block_list, state.blocklist),
-                          (self.allow_list, state.whitelist)):
-            lb.delete(0, tk.END)
-            for d in items:
-                lb.insert(tk.END, d)
+        self.lists.render(config.load_state())
 
     def _tick(self) -> None:
         # The countdown needs 1 Hz; the stat tiles change at most once a minute,
@@ -758,7 +792,25 @@ class App(tk.Tk):
         if self._ticks % self.STATS_EVERY == 0:
             self._render_stats(st)
         self._ticks += 1
+        # Every 10s, not every second: the probe shells out to the desktop
+        # (measured 6.7ms median, 10.4ms worst), and someone changing their
+        # system theme is not waiting on a stopwatch.
+        if self._ticks % self.THEME_EVERY == 0:
+            scheme = mk.detect_scheme()
+            if scheme != self._scheme:
+                self._restyle(scheme)
         self.after(1000, self._tick)
+
+
+def _pill_state(st: dict) -> tuple:
+    """(label, dot colour) for the title-bar status chip."""
+    if st["locked"]:
+        return "Locked", mk.theme.AMBER
+    if st["session_active"]:
+        return "Focusing", mk.theme.TEAL
+    if st["effective_mode"] == OFF:
+        return "Off", mk.theme.SLATE_2
+    return st["effective_mode"].title(), mk.theme.TEAL
 
 
 def main():
