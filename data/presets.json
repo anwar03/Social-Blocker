@@ -9,18 +9,18 @@
       "blurb": "Whitelist + locked — one long, uninterruptible block."
     },
     {
-      "name": "Sprint",
+      "name": "Study",
       "default_minutes": 25,
       "mode": "whitelist",
       "locked": false,
-      "blurb": "Pomodoro-length whitelist sprint."
+      "blurb": "Pomodoro-length whitelist block for reading or coursework."
     },
     {
-      "name": "Wind-down",
+      "name": "Social Detox",
       "default_minutes": 45,
       "mode": "blacklist",
       "locked": false,
-      "blurb": "Gentle blacklist — distractions off, the rest of the web open."
+      "blurb": "Gentle blacklist — the social feeds off, the rest of the web open."
     }
   ]
 }

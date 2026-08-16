@@ -24,15 +24,45 @@ class PillGroup(tk.Frame):
 
     Selection is ttk's own `selected` state rather than a style swap, so the
     themed element picks the right face and the widget keeps its focus ring.
+
+    `stretch` turns the row into a segmented control: equal columns that divide
+    the parent's width, for a group that owns its whole line. Left off, each
+    pill is its own label's width — which is what a group sharing a line with
+    something else (the composer's, beside the stepper) needs. The pill face is
+    a 9-patch, so widening a button re-tiles its edges and leaves the corner
+    radius alone.
+
+    `height` pins the row instead of letting the pills' own font decide it —
+    for a group sharing a line with a taller control, so the two agree on any
+    font rather than only on the machine they were measured on. Same 9-patch
+    reasoning as `stretch`: growing a pill re-tiles its edges, not its corners.
     """
 
-    def __init__(self, parent, options, command, background=None, gap=6):
+    def __init__(self, parent, options, command, background=None, gap=6,
+                 stretch=False, height=None):
         super().__init__(parent, background=background or mk.theme.CARD)
         self.buttons = {}
-        for value, label in options:
+        if height:
+            # Geometry propagation off, or the tallest pill would set the
+            # height back. Width still comes from the parent's cell.
+            self.configure(height=height)
+            self.grid_propagate(False)
+            self.rowconfigure(0, weight=1)
+        for i, (value, label) in enumerate(options):
             b = ttk.Button(self, text=label, style="Pill.TButton",
                            takefocus=True, command=lambda v=value: command(v))
-            b.pack(side="left", padx=(0, gap))
+            if stretch:
+                # The gaps are their own fixed columns rather than padding
+                # inside the pill columns. `uniform` equalises *columns*, so
+                # padding there would come out of the pill and leave whichever
+                # one carries no trailing gap wider than its neighbours.
+                column = i * 2
+                if i:
+                    self.columnconfigure(column - 1, minsize=gap)
+                self.columnconfigure(column, weight=1, uniform="pill")
+                b.grid(row=0, column=column, sticky="nsew" if height else "ew")
+            else:
+                b.pack(side="left", padx=(0, gap))
             self.buttons[value] = b
 
     def select(self, value) -> None:
@@ -44,35 +74,68 @@ class Stepper(tk.Canvas):
     """`- 50 min +` inside one rounded panel.
 
     A canvas because Tk cannot round a container: the panel is a generated
-    image and the three controls are canvas windows on top of it. Fixed size,
-    so unlike the hero this never needs a resize repaint.
+    image and the three controls are canvas windows on top of it. It never
+    needs a resize repaint — but its width is *measured*, not fixed. Every
+    part of it is a function of the resolved UI font, and a hard-coded panel
+    that fits on one machine has the value sitting on top of the `-` button on
+    the next.
     """
 
-    WIDTH, HEIGHT, RADIUS = 152, 40, 11
+    HEIGHT, RADIUS = 40, 11
+    MIN_WIDTH = 152     # so a narrow font still gives a panel, not a sliver
+    EDGE = 6            # panel edge to a step button
+    SIDE = HEIGHT - 2 * EDGE    # the step buttons are square, so one side
+    GAP = 12            # step button to the value group
+    UNIT_GAP = 5        # the value to its "min"
 
     def __init__(self, parent, variable, on_step, fonts, background=None):
         self._bg = background or mk.theme.CARD
-        super().__init__(parent, width=self.WIDTH, height=self.HEIGHT,
-                         background=self._bg, highlightthickness=0, bd=0)
-        self._panel = mk.rounded_rect(self.WIDTH, self.HEIGHT, self.RADIUS,
-                                      mk.theme.SUNK, mk.theme.LINE_SOFT, self._bg)
-        self.create_image(0, 0, anchor="nw", image=self._panel)
-        minus = ttk.Button(self, text="−", width=2, style="Step.TButton",
+        super().__init__(parent, height=self.HEIGHT, background=self._bg,
+                         highlightthickness=0, bd=0)
+        # No `width=`: that is in characters, and the canvas item below sets
+        # the real size in pixels. Two sizing rules would just disagree.
+        minus = ttk.Button(self, text="−", style="Step.TButton",
                            command=lambda: on_step(-5))
-        plus = ttk.Button(self, text="+", width=2, style="Step.TButton",
+        plus = ttk.Button(self, text="+", style="Step.TButton",
                           command=lambda: on_step(5))
-        self.create_window(6, self.HEIGHT // 2, anchor="w", window=minus)
-        self.create_window(self.WIDTH - 6, self.HEIGHT // 2, anchor="e", window=plus)
         # A classic tk.Entry, not ttk: the panel already draws the border, and
         # a ttk.Entry would paint its own rounded face inside this one.
         entry = tk.Entry(self, textvariable=variable, width=4, justify="center",
                          font=fonts.ui_bold, background=mk.theme.SUNK,
                          foreground=mk.theme.PINE, insertbackground=mk.theme.PINE,
                          relief="flat", highlightthickness=0, bd=0)
-        self.create_window(self.WIDTH // 2 - 8, self.HEIGHT // 2, anchor="e",
-                           window=entry)
-        self.create_text(self.WIDTH // 2 - 2, self.HEIGHT // 2, anchor="w",
-                         text="min", fill=mk.theme.SLATE, font=fonts.small)
+        self._place(minus, plus, entry, fonts)
+
+    def _place(self, minus, plus, entry, fonts) -> None:
+        """Size the panel to its contents, then lay them out on it.
+
+        The two step buttons are the exception to the measuring: they are
+        given `SIDE` on both axes rather than their requested width, because
+        "square" has to survive a font change. A ttk button sizes to its
+        label, and `−` and `+` do not measure the same in every face — left
+        to themselves they would be two different rectangles.
+        """
+        unit = tkfont.Font(family=fonts.small[0], size=fonts.small[1]).measure("min")
+        value = entry.winfo_reqwidth() + self.UNIT_GAP + unit
+        width = max(self.MIN_WIDTH,
+                    2 * (self.EDGE + self.SIDE + self.GAP) + value)
+        self.configure(width=width)
+        self._panel = mk.rounded_rect(width, self.HEIGHT, self.RADIUS,
+                                      mk.theme.SUNK, mk.theme.LINE_SOFT, self._bg)
+        self.create_image(0, 0, anchor="nw", image=self._panel)
+        middle = self.HEIGHT // 2
+        self.create_window(self.EDGE, middle, anchor="w", window=minus,
+                           width=self.SIDE, height=self.SIDE)
+        self.create_window(width - self.EDGE, middle, anchor="e", window=plus,
+                           width=self.SIDE, height=self.SIDE)
+        # The value group is centred on the panel, not on the space between the
+        # buttons: the two are the same thing while the buttons match, and this
+        # keeps "min" reading as part of the number if they ever stop matching.
+        left = (width - value) / 2
+        self.create_window(left, middle, anchor="w", window=entry)
+        self.create_text(left + entry.winfo_reqwidth() + self.UNIT_GAP, middle,
+                         anchor="w", text="min", fill=mk.theme.SLATE,
+                         font=fonts.small)
 
 
 class TabStrip(tk.Frame):

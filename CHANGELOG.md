@@ -2,6 +2,344 @@
 
 All notable changes to SocialBlocker. Newest first.
 
+## 2026-08-17 — The composer's mode pills take the stepper's height
+
+- **`PillGroup` gained `height=`**, and the composer passes `Stepper.HEIGHT`.
+  The pills were **42px** against the stepper's 40 — they were the taller half,
+  so they set the row height and the stepper sat centred at y=1.
+- **Why not just trim the pill style's padding to 4→3:** a pill's height is
+  font metrics plus padding, so a hand-tuned pad matches on the machine it was
+  measured on and drifts on the next. The stepper already *measures* itself, so
+  it is the honest single source for the row's height; the pills follow it.
+- Implemented as `grid_propagate(False)` plus a weighted row, with the pills
+  gridded `nsew` — their face is a 9-patch, so growing one re-tiles its edges
+  and leaves the corner radius alone. Width still comes from the parent's cell,
+  so the segmented-control behaviour is unchanged.
+- Measured after: row 40, stepper 40x152 at y=0, both pills 119x40 at y=0.
+  The all-day mode card's `PillGroup` passes no height and is untouched at 42.
+  35 tests pass.
+
+## 2026-08-17 — The hero's corner radius is derived from the cards', not hand-set
+
+- **`Hero.RADIUS` is now `mk.CARD_RADIUS / 2.0` instead of a literal `8`.** The
+  hero field is rastered at half resolution and zoomed back up, so `8` was
+  drawing a **16px** corner while every card below it is `CARD_RADIUS = 11` —
+  two independently written numbers that had drifted apart. Measured after the
+  change: 5.5 x 2 = 11px, matching the cards in both schemes.
+- **Known remaining difference (not fixed here):** the hero's corner is cut on
+  the half-resolution raster, so `zoom(2)` doubles every step and the arc comes
+  out as a 2px staircase where the cards' 9-patch corner is smoothly
+  anti-aliased. Same radius, coarser edge. Fixing it means re-rendering just the
+  four corner squares at full resolution (~480 pixels) and giving
+  `Raster.round_corners` a `corners=` filter.
+
+## 2026-08-17 — The boot-block duration uses the focus-session stepper
+
+- **`StartupPanel`'s `ttk.Entry` + `"min"` label is now the same `Stepper`
+  widget the composer uses** (`−  300  min  +` on a rounded SUNK panel).
+  A boot block and a focus session are the same quantity — one duration in
+  minutes — so making them two different controls asked the user to learn the
+  field twice, and the bare entry gave no hint that it was editable at all.
+- **`_nudge` is now one module-level `_nudge_minutes(variable, delta, fallback)`
+  in `gui.py`**, shared by both steppers instead of copied. It keeps the field
+  a number (a blank or half-typed value falls back rather than raising) and
+  floors it at 5 min. Fallbacks: composer 90, boot block 300.
+- Measured (both schemes, live window): the boot stepper is **152x40**, the
+  same size as the composer's; the row is 46px tall and every child is
+  vertically centred on it (checkbutton y=12 h=22, stepper y=3 h=40, Save
+  y=0 h=46). Blank + step → `305`; `5` − step → `5`. 35 tests pass.
+- Presentation only: `widgets.Stepper` takes a variable and an `on_step`
+  callback, so no policy moved out of `control.py`.
+
+## 2026-08-16 — Presets renamed, settings line back to one quiet caption
+
+- **Renamed in `data/presets.json`:** `Sprint` → **Study**, `Wind-down` →
+  **Social Detox** (`Deep Work` unchanged). Blurbs follow the new names.
+  Durations, modes and locks are untouched — 90m whitelist locked / 25m
+  whitelist / 45m blacklist.
+- **The settings line reverts to the earlier design** (this reverses
+  "Preset settings read as fields, not a sentence", below). `90m · whitelist ·
+  locked` is one `mono_small` label in one grey again, not three labels in two
+  weights with `locked` in AMBER. *Why:* a preset is a **starting point** the
+  composer then lets you change, so no field in it earns emphasis — as a single
+  quiet caption the three cards scan as one set, and the mono face lands the `·`
+  on the same column in each. The amber also over-promised: it made `locked`
+  look like state when it is only what the composer will be pre-filled with.
+- `fonts.meta` / `fonts.meta_bold` are gone — nothing used them once the fields
+  merged. `mono_small` is the meta face again.
+- Measured (Ink, live window): cards 289/283/290 x 71, name at y=15, meta at
+  y=41 in `Ubuntu Mono 8` `#9db1b7`; two child widgets per card instead of a
+  nested frame plus up to three labels. Clicking `Social Detox` pre-fills the
+  composer 45 / blacklist / unlocked. Verified in both schemes.
+- **Fixed a brittle test coupling this rename exposed.** `tests/test_engine.py`
+  hard-coded the preset names `"Deep Work"` and `"Sprint"`, while
+  `presets.json` documents itself as user-editable ("Edit freely; no code
+  change needed"). Editing data is not supposed to break tests, so both preset
+  tests now take the name from `control.list_presets()` and assert against that
+  entry's own fields. 35 tests pass.
+
+## 2026-08-16 — `+15 min` is a capsule, matching the status chip
+
+- New `Chip.TButton` (`mistkit._chip_style`): the title bar's own button shape,
+  the same capsule as `StatusPill` — `WHITE` fill, `LINE` border, radius
+  `CHIP_HEIGHT / 2`, `small_bold`.
+- **Why it needed a new element rather than a `_pill_style` call.** A 9-patch
+  reserves `border` pixels on all four sides *as the label's padding*, so a
+  radius of 15 would force a 46px-tall button — the same wall `_icon_style`
+  documents. The fix is an asymmetric border, `(15, 0, 15, 0)`: the two
+  semicircular caps are protected, only the 2px flat middle stretches, and
+  vertical stretch is zero because the padding is derived from the font's
+  linespace so the button lands on 30px exactly. Elliptical caps are what a
+  vertical stretch would have produced.
+- Verified: the button is 74x30 against the chip's 92x30, both occupying
+  y=361..391 in the bar; the tile's corner is `(22, 36, 42)` = CARD, its centre
+  `(30, 47, 54)` = WHITE, the same fill `StatusPill` paints.
+- A `focus` face is included, ordered after `active` — both states can hold at
+  once and a hovering user is on a mouse. Without it this layout has no focus
+  ring at all, the trap already hit on `Step.TButton`. Confirmed ttk reports
+  `('focus',)` and the face renders a teal capsule outline. 35 tests pass.
+
+## 2026-08-16 — `+15 min` wears the mode pill's face (superseded above)
+
+- The title bar's `+15 min` moves from `Ghost.TButton` (outlined) to
+  `Pill.TButton`, the style the Blacklist/Whitelist/Off pills use. It is only
+  ever drawn, never put in the `selected` state, so what shows is the neutral
+  face: SUNK fill, no outline.
+- Verified: 87x42 against the Blacklist pill's 89x42 (the labels differ by two
+  characters), corners cut to `(22, 36, 42)` = CARD, which is what the title
+  bar is, and the centre `(14, 24, 28)` = SUNK.
+- **`Pill.TButton` gained a `disabled` foreground.** It had none, because until
+  now it was only worn by mode groups that are never disabled — a disabled
+  `+15 min` would have kept full-strength PINE text while refusing to be
+  pressed. Now maps to SLATE_2, the same disabled colour the outlined pills
+  use. Measured: `#e6eef0` → `#74898f`. 35 tests pass.
+
+## 2026-08-16 — One button starts and stops a session; extend moved to the bar
+
+- **The hero has no buttons any more.** `+15 min` and `Stop` are gone from it,
+  and with them `Hero.BUTTON_Y`, the `on_extend` / `on_stop` constructor
+  arguments and `mistkit.pill_on_field()` — that function existed only to cut
+  a pill's corners against the fog field, and nothing sits on the field now.
+  `_outlined_pill` loses its `bg` plumbing for the same reason.
+- **Start and Stop are one button.** The composer's action button now names
+  what pressing it will do: "Start focus" (Primary) with no session, "Stop
+  focus" (Danger) with one. Two controls for one slot in the user's head, in
+  two different cards, was the actual problem.
+- While the session is locked the button reads "Locked until the timer ends"
+  and is disabled. `st["locked"]` comes straight from `control.status()`, so
+  the front-end is displaying the lock, not deciding it — `stop_session` is
+  still the thing that refuses.
+- **`+15 min` replaces the title bar's Refresh icon.** Extending acts on the
+  running session globally, so it belongs beside the status chip rather than
+  inside a read-out. Disabled when no session is running (disabled, not hidden,
+  so the bar does not jump). Refresh was already available in the list card;
+  removing the duplicate cost nothing. Extend stays enabled while locked, which
+  is what `control` allows.
+- `Hero.HEIGHT` is now `RING + 2 * PAD` rather than a hand-set 186. **Correction
+  to the estimate given when planning this:** removing the buttons did not free
+  ~50px. The buttons were at y=135..165 and the ring occupies 26..154 — the
+  *ring* was always what set this height, so the honest saving is 6px (186 →
+  180) and it comes from making the margin equal `PAD` instead of 29.
+- Verified across all four states (idle / running / locked / cleared) and
+  through a theme rebuild: labels, styles and enabled-states are correct in
+  each, and the hero canvas is left with 8 items and no child widgets.
+  35 tests pass.
+
+## 2026-08-16 — The list card is the same height as the left column
+
+- The two body columns were already the same width (`uniform="col"`), but the
+  list card asked for 394px against the left column's 331 — the grid row takes
+  the taller of the two, so 63px of dead space sat under the focus-session
+  card.
+- Fixed by making the list *elastic* rather than by trimming a number: the
+  Treeview now asks for `MIN_ROWS = 3` and grows into whatever the row height
+  turns out to be. The left column is the height authority; the list absorbs
+  the difference. A taller left column now widens the list automatically
+  instead of re-opening this bug.
+- Measured after: both columns y=505..836, 331px each, 438px wide each. The
+  visible list goes from 8 rows to 5.7 (153px at a 27px rowheight) — it
+  scrolls, and the body is inside a scroller anyway, so nothing is lost but
+  glanceable rows. 35 tests pass.
+
+## 2026-08-16 — The stepper's − and + are 28x28 keys with radius 5
+
+- "Square" meant the *box*, not the corners: the keys keep their 28x28 shape
+  from the entry below and get their rounded face back. Two properties, two
+  mechanisms — `Stepper.SIDE` owns the size, `Step.TButton` owns the corner.
+- Radius 5 is concentric again (panel 11, keys inset 6), and the corners are
+  cut against `SUNK` — verified `(238, 243, 244)` at the tile corner against
+  `CARD`'s `(251, 253, 253)` in the middle.
+- Padding is (1, 0) rather than (4, 4): the 9-patch reserves its 5px `border`
+  as label padding on top of whatever is configured. Natural size lands at
+  20x26 inside the forced 28x28, so the canvas grows the key instead of
+  fighting it — no clipped glyph.
+- The `("focus", …, TEAL)` face returns with the pill, because a pill layout
+  has no focus element and `_flat`'s teal `focuscolor` goes away with it.
+  Confirmed by rendering both faces: the focus tile draws a teal rounded
+  outline. 35 tests pass.
+
+## 2026-08-16 — The stepper's − and + became square keys, 28x28
+
+- The corners were already square (previous entry); this makes the *shape*
+  square too. They were 42x30 rectangles.
+- The size is `Stepper.SIDE = HEIGHT - 2 * EDGE` = 28, forced through the
+  canvas window items rather than through padding. Padding sizes a ttk button
+  from its *label*, and `−` and `+` need not measure the same in every font —
+  padding can therefore give two rectangles, never a guaranteed square. One
+  constant, derived from the panel it sits in, cannot.
+- `width=2` (characters) dropped from both buttons: two sizing rules for one
+  widget always disagree eventually. `width=0` added to the style instead, so
+  the button hugs its glyph if it is ever used off the canvas — clam's
+  inherited default made a bare `Step.TButton` 102px wide.
+- Measured: both 28x28 at x=6..34 / x=118..146, glyph 8px wide with a 16px
+  linespace inside 28 — no clipping. The panel is now 152, its `MIN_WIDTH`
+  floor, because the contents come to 151; on this font the floor, not the
+  measurement, is setting the width. 35 tests pass.
+
+## 2026-08-16 — The stepper's − and + are square-cornered again
+
+- Reverted the entry below at the user's request: square corners inside the
+  rounded panel are the wanted look, so `Step.TButton` goes back to `_flat`.
+- The comment that came with the old flat style is *not* restored — it claimed
+  the glyphs "get no face of their own", which the code contradicted. They do
+  carry a face (a `CARD` tile on the panel's `SUNK`); the new comment says the
+  square is a deliberate counterpoint to the panel's radius.
+- Being flat also keeps the keyboard focus ring for free: `_flat` sets
+  `focuscolor` teal and its layout has a `Button.focus` element, where the pill
+  layout has none — so the focus face added below is no longer needed.
+- Measured after the revert: buttons 42x30 at x=6..48 / x=131..173, gaps 12px
+  on both sides of the value, panel back to 179 wide (from 175) because the
+  stepper sizes itself from its contents. 35 tests pass.
+
+## 2026-08-16 — The stepper's − and + are rounded (superseded above)
+
+- **They were square, and not on purpose.** The comment above `Step.TButton`
+  said the glyphs "get no face of their own", but the style painted them
+  `CARD` while the stepper panel is `SUNK` — so they rendered as lighter
+  rectangles with hard corners on a rounded panel. The intent and the code had
+  disagreed since they were written.
+- They now use the 9-patch pill at **radius 5**, which is the concentric
+  radius, not a taste call: the panel's radius is 11 and the buttons sit 6px
+  inside it on every side (measured: 40px panel, buttons at y=6..34), and a
+  nested corner reads as parallel only at `outer − inset`.
+- Corners are cut against `SUNK`, verified as `(14, 24, 28)` rather than
+  `CARD`'s `(22, 36, 42)` — the same defect just fixed on the hero buttons.
+- **A focus face comes with it.** A pill layout has no focus ring element, so
+  converting from `_flat` would have silently dropped the keyboard cursor —
+  which `_flat`'s own docstring calls a trade not worth making. A `("focus",
+  …, TEAL)` face restores it; confirmed ttk reports `('focus',)` on the widget.
+- Padding drops to (7, 1) to offset the 5px the 9-patch border reserves around
+  the label; the button lands at 40x28 against 42x28 before, and the stepper's
+  measured width absorbs the difference (179 → 175).
+
+## 2026-08-16 — Fixed: the duration sat on top of the `−` button
+
+- **The stepper's value overlapped its minus button by 14px.** The panel was a
+  fixed 152px with the value hand-placed at `WIDTH // 2 - 8`, but the step
+  buttons size themselves from the resolved UI font — measured 42px each here,
+  spanning 6..48, while the entry started at 34. A hard-coded layout over a
+  font-sized widget is only ever correct on the machine it was tuned on.
+- `Stepper` now measures its parts and sizes the panel to them: 179px here,
+  with a 12px gap either side of the value and 11px before the `+`. `MIN_WIDTH`
+  keeps a narrow font from producing a sliver.
+- **The composer row is justified.** The stepper keeps its measured width and
+  the Whitelist / Blacklist pills divide the rest (`stretch=True`), so the row
+  runs 0..406 and ends flush with the Start focus button below it — verified in
+  root coordinates, since the row and the button live in different frames.
+
+## 2026-08-16 — Fixed: pale wedges at the hero buttons' corners
+
+- **`+15 min` and `Stop` showed a halo at each rounded corner.** The pill tile
+  is opaque and paints its corners with the colour behind the widget; every
+  pill style assumed that colour was `CARD`. Those two buttons are canvas
+  windows on the hero's fog gradient, not on a card, so each corner was a wedge
+  of card colour. Measured at the button's top-left: **15 units off on Ink, 31
+  on Mist** — near-white against a soft grey field, which is why it read as a
+  shadow.
+- `mk.pill_on_field()` re-cuts the outlined pills against a colour the caller
+  supplies; `Hero` samples it from its own `Fog` at the button row, so the
+  corners are the field. Corner error is now **1 unit** in both schemes, which
+  is the gradient's own drift across three pixels.
+- The style name carries the colour, so a second backdrop gets its own correct
+  style instead of silently reusing the first. Callers must pass a stable
+  colour — ttk elements can never be freed — and the field moves ~4 units
+  across the whole window-width range, so one sample covers it.
+- Swept every other `ttk.Button` in the window comparing its style's cut colour
+  against its real parent background: all sixteen agree. The defect was these
+  two.
+- `_pill_style()` takes the backdrop as a parameter, and the two outlined pills
+  are defined once in `_outlined_pill()` so the card cut and the field cut
+  cannot drift apart. `Hero.BUTTON_Y` replaces the `150` that was written in
+  two places.
+
+## 2026-08-16 — The mode row is a segmented control
+
+- **Blacklist / Whitelist / Off now divide the card's full width** instead of
+  hugging their labels and leaving the line half empty. `PillGroup` takes a
+  `stretch` flag: grid with equal weighted columns and `uniform`, `sticky="ew"`.
+  Only the all-day mode card passes it — the composer's pair shares its line
+  with the stepper and must stay label-width.
+- The gaps between stretched pills are their own fixed-width columns, not
+  padding inside the pill columns. `uniform` equalises columns, so padding
+  there comes out of the button: the first cut was 134 / 134 / 140 because the
+  last pill carried no trailing gap. Now it measures 136 / 136 / 136, flush to
+  both edges, and 182 / 183 / 183 at a wider window (1px is integer division).
+- The pill face is a 9-patch with `border=radius`, so a widened pill re-tiles
+  its edges and the corner radius is untouched — no stretched corners.
+
+## 2026-08-16 — Preset settings read as fields, not a sentence (reverted above)
+
+- **The preset metadata line is restyled.** `90m · whitelist · locked` was one
+  8pt monospace label in one grey, so a duration, a policy and a lock all
+  carried identical weight. It is now three labels: duration bold, mode plain,
+  and `locked` in AMBER — the colour the hero eyebrow and the composer's lock
+  checkbox already use, so the one field that costs you something is no longer
+  the quietest thing on the card.
+- The `·` separators are gone; with the fields no longer looking alike they
+  were noise, and a 10px gap separates them. Glyph ink drops 120px → 95px
+  (the row itself is 7px wider, all of it whitespace).
+- New `fonts.meta` / `fonts.meta_bold` (UI face at 8pt) replace `mono_small`
+  here. The old docstring claimed monospace made the cards scan as a table;
+  in practice the fields align to within a pixel either way, while the UI face
+  at the same nominal size sets 13px narrower. Asking the mono face for 7pt
+  returns 8pt regardless, so "make it smaller" could not have been a size
+  change alone.
+
+## 2026-08-16 — The ring drains instead of filling
+
+- **The sweep runs the other way round.** The arc is still anchored at 12
+  o'clock, but the angle now grows anti-clockwise, so the *free end* — the part
+  that actually moves as the session drains — travels clockwise, left to right
+  across the top of the ring. It used to crawl right to left.
+- The angle lives in one place now (`mistkit._sweep()`), shared by the arc
+  body, its anti-aliasing test and its end caps. Three copies of
+  `atan2(dx, -dy)` meant three chances for the arc and its caps to disagree
+  about which way round the ring goes; a direction is one decision.
+
+- **The teal arc is now the time that is left**, not the time spent: `frac` in
+  `Hero._render_ring()` is `remaining / total` rather than its complement, so
+  the ring empties as the session runs down and the muted track is what has
+  already gone. The arc and the numeral inside it now answer the same question.
+- The colour is unchanged — `theme.TEAL_RGB`, which *is* `#2f8f9d` on Mist. Ink
+  keeps its own lighter teal (`#4fb3c2`) on purpose: `#2f8f9d` measures 4.6:1
+  against Ink's card versus 6.5:1 for the current one.
+
+## 2026-08-16 — The countdown fits inside its ring
+
+- **Fixed: long countdowns collided with the ring stroke.** The hero numeral was
+  pinned at one size, so `4:59:14` measured 105px in the display face against
+  91px of clear width, and a 12-hour session (`12:59:14`, 122px) was worse. The
+  91px is not the ring's inner diameter (106px) — the numeral sits 8px above
+  centre to leave room for the `LEFT` cap, and the chord at that height is
+  narrower. Measuring against the diameter was the original mistake.
+- `mistkit.fit_in_circle()` now picks the largest size whose *chord* at the
+  text's own line box still fits, so `59:14` keeps the full 23pt and only
+  hour-length strings step down (20pt for `4:59:14`, 18pt for `12:59:14`).
+  Measuring fonts are cached — the countdown asks once a second.
+- `RingArt.inner_radius` and `Hero.VALUE_DY` / `CAP_DY` replace the numbers that
+  were repeated between the ring art and the text placement, so the fit maths
+  and the actual coordinates cannot drift apart.
+
 ## 2026-08-16 — Rounded cards, and the redraw bug they exposed
 
 - **Cards are rounded.** `mk.card()` now returns a themed **`ttk.Frame`** whose

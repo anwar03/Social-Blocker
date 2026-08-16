@@ -142,18 +142,24 @@ class EngineTest(unittest.TestCase):
         self.assertTrue(config.load_state().session.active())
 
     # ---- presets ----
+    # `data/presets.json` is documented as user-editable, so these tests take
+    # the name out of the file rather than hard-coding one: renaming a preset
+    # must not turn into a test failure.
     def test_presets_list_and_start(self):
-        names = [p["name"] for p in control.list_presets()]
-        self.assertIn("Deep Work", names)
+        presets = control.list_presets()
+        self.assertTrue(presets)
 
-        applied = control.start_preset("Deep Work")
-        self.assertEqual(applied.mode, WHITELIST)
-        self.assertTrue(applied.locked)
+        first = presets[0]
+        applied = control.start_preset(first["name"])
+        self.assertEqual(applied.mode, first["mode"])
+        self.assertEqual(applied.locked, first["locked"])
 
     def test_preset_minutes_override(self):
-        control.start_preset("Sprint", minutes=5)
+        preset = control.list_presets()[0]
+        self.assertNotEqual(preset["default_minutes"], 5)   # the override must bite
+        control.start_preset(preset["name"], minutes=5)
         remaining = config.load_state().session.remaining()
-        self.assertGreater(remaining, 4 * 60)      # ~5 min, not the 25-min default
+        self.assertGreater(remaining, 4 * 60)      # ~5 min, not the preset's default
         self.assertLessEqual(remaining, 5 * 60)
 
     def test_unknown_preset_raises(self):

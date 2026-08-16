@@ -265,6 +265,8 @@ class Fonts:
         self.ring = (display, 23)
         self.mark = (display, 15, "italic")
         self.mono = (mono, 10)
+        # Domain rows and the preset settings line: both are data, and the mono
+        # face keeps their `·` separators on the same column down a card.
         self.mono_small = (mono, 8)
 
 
@@ -275,6 +277,47 @@ def track(text: str) -> str:
     the only way to get that airy uppercase look. Short labels only.
     """
     return " ".join(text)
+
+
+_MEASURING = {}
+
+
+def _sized(family: str, size: int) -> tkfont.Font:
+    """A plain `family`/`size` font kept for measuring.
+
+    `tkfont.Font` objects are Tk resources, and the countdown asks for one
+    every second, so they are cached per (family, size) rather than created
+    and abandoned on each tick.
+    """
+    key = (family, size)
+    if key not in _MEASURING:
+        _MEASURING[key] = tkfont.Font(family=family, size=size)
+    return _MEASURING[key]
+
+
+def fit_in_circle(font: tuple, text: str, radius: float, offset: float = 0.0,
+                  floor: int = 14) -> tuple:
+    """`font`, shrunk until `text` fits inside a circle of `radius`.
+
+    `offset` is how far the text's centre sits from the circle's centre. That
+    matters: Tk centres a text item on its whole line box, so the widest point
+    the glyphs can reach is the *chord* at `|offset| + linespace / 2`, not the
+    diameter. Measuring against the diameter is what let a "4:59:14" countdown
+    run into the ring's stroke.
+
+    `font` must be a plain `(family, size)` tuple — no weight or slant words.
+    Returns the same shape, so it can go straight into `itemconfigure`.
+    """
+    family, size = font[0], font[1]
+    while size > floor:
+        measured = _sized(family, size)
+        half = measured.metrics("linespace") / 2.0 + abs(offset)
+        if half < radius:
+            chord = 2.0 * math.sqrt(radius * radius - half * half)
+            if measured.measure(text) <= chord:
+                break
+        size -= 1
+    return (family, size)
 
 
 # --- ttk theme -------------------------------------------------------------
@@ -348,21 +391,27 @@ _pill_elements: set = set()
 
 def _pill_style(st: ttk.Style, p: Palette, scheme: str, name: str,
                 faces: tuple, font, pad, radius: float = _PILL_RADIUS,
-                tile: int = _PILL_TILE) -> None:
+                tile: int = _PILL_TILE, bg: tuple = None) -> None:
     """Give `name` a rounded 9-patch face per widget state.
 
     `faces` is ordered `((state, fill, border), ...)` with the default first;
     ttk takes the first matching spec, so "selected" must precede "active" or a
     hovered selection would fall back to the hover face.
 
+    `bg` is what is really behind the widget, which the tile paints into its
+    corners (see `pill_image`) — a card, unless the caller says otherwise. Get
+    it wrong and the rounded corners show as little coloured wedges, because
+    that is exactly what they are.
+
     The element is created once per (scheme, name) and never again: ttk has no
     way to redefine an element, so a theme switch makes a *new* one and only
     re-points the layout. That is why the name carries the scheme.
     """
+    bg = bg or _rgb(p.CARD)
     key = (scheme, name)
     element = "%s.%s.pill" % (name, scheme)
     if key not in _pill_elements:
-        images = [(state, pill_image(tile, radius, fill, _rgb(p.CARD), border))
+        images = [(state, pill_image(tile, radius, fill, bg, border))
                   for state, fill, border in faces]
         _pill_images[key] = images
         st.element_create(element, "image", images[0][1],
@@ -373,12 +422,28 @@ def _pill_style(st: ttk.Style, p: Palette, scheme: str, name: str,
         ("Button.padding", {"sticky": "nsew", "children": [
             ("Button.label", {"sticky": "nsew"})]})]})])
     # width=0 matters: clam's TButton sets `width: -11`, an 11-character
-    # minimum that every derived style inherits. Left alone it makes "Off" and
-    # "Blacklist" exactly the same 140px wide, which is not a pill row.
+    # minimum that every derived style inherits. Left alone it pins "Off" and
+    # "Blacklist" at the same 140px whatever the parent is, so a pill can
+    # neither hug its label nor divide a row — `PillGroup` needs both.
     # The 9-patch `border` is also reserved as padding around the label, so the
     # per-style padding below is *on top of* that inset, not instead of it.
     st.configure(name, font=font, padding=pad, anchor="center", width=0,
-                 foreground=p.PINE, background=p.CARD)
+                 foreground=p.PINE, background=_hex(bg))
+
+
+def _outlined_pill(st: ttk.Style, p: Palette, scheme: str, fonts: Fonts,
+                   kind: str, name: str) -> None:
+    """One of the two outlined pills. Both sit on cards, so both cut to CARD.
+
+    Both faces are defined here rather than at their call sites so Ghost and
+    Danger cannot drift apart in anything but their accent.
+    """
+    accent = p.TEAL_RGB if kind == "Ghost" else _rgb(p.DANGER)
+    _pill_style(st, p, scheme, name,
+                ((None, _rgb(p.CARD), _rgb(p.LINE)),
+                 ("active", _rgb(p.WHITE), accent)), fonts.ui, (8, 4))
+    hover = p.TEAL_DEEP if kind == "Ghost" else p.DANGER
+    st.map(name, foreground=[("disabled", p.SLATE_2), ("active", hover)])
 
 
 def _style_buttons(st: ttk.Style, fonts: Fonts, p: Palette) -> None:
@@ -391,8 +456,13 @@ def _style_buttons(st: ttk.Style, fonts: Fonts, p: Palette) -> None:
                 ((None, _rgb(p.SUNK), None),
                  ("selected", p.TEAL_RGB, None),
                  ("active", tint, None)), fonts.ui, (9, 4))
+    # `disabled` is in the map because this pill is no longer only used for
+    # the mode groups, which are never disabled: the title bar's "+15 min" is
+    # a plain action wearing the same face, and without this its label would
+    # stay full-strength PINE while the button refused to be pressed.
     st.map("Pill.TButton",
-           foreground=[("selected", p.ON_ACCENT), ("active", p.TEAL_DEEP)])
+           foreground=[("disabled", p.SLATE_2), ("selected", p.ON_ACCENT),
+                       ("active", p.TEAL_DEEP)])
 
     _pill_style(st, p, scheme, "Primary.TButton",
                 ((None, p.TEAL_RGB, None),
@@ -402,26 +472,31 @@ def _style_buttons(st: ttk.Style, fonts: Fonts, p: Palette) -> None:
     st.map("Primary.TButton", foreground=[("disabled", p.SLATE_2),
                                           ("active", p.ON_ACCENT)])
 
-    # Outlined pill: an action that is available but not the point of the card.
-    _pill_style(st, p, scheme, "Ghost.TButton",
-                ((None, _rgb(p.CARD), _rgb(p.LINE)),
-                 ("active", _rgb(p.WHITE), p.TEAL_RGB)), fonts.ui, (8, 4))
-    st.map("Ghost.TButton", foreground=[("disabled", p.SLATE_2),
-                                        ("active", p.TEAL_DEEP)])
+    # Outlined pills: an action that is available but not the point of the card.
+    _outlined_pill(st, p, scheme, fonts, "Ghost", "Ghost.TButton")
+    _outlined_pill(st, p, scheme, fonts, "Danger", "Danger.TButton")
 
-    _pill_style(st, p, scheme, "Danger.TButton",
-                ((None, _rgb(p.CARD), _rgb(p.LINE)),
-                 ("active", _rgb(p.WHITE), _rgb(p.DANGER))), fonts.ui, (8, 4))
-    st.map("Danger.TButton", foreground=[("active", p.DANGER)])
+    # The title bar's own button, shaped like the chip standing next to it.
+    _chip_style(st, p, scheme, fonts, "Chip.TButton")
 
     _icon_style(st, scheme, "Icon.TButton",
                 ((None, _rgb(p.CARD), _rgb(p.LINE)),
                  ("active", _rgb(p.WHITE), p.TEAL_RGB)), _rgb(p.CARD))
 
-    # The stepper's - and + are glyphs inside the group's own border, so they
-    # get no face of their own — a pill inside a pill reads as clutter.
-    _flat(st, p, "Step.TButton", p.CARD, p.SLATE, p.CARD, p.TEAL_DEEP, p.CARD,
-          fonts.ui_bold, (10, 4))
+    # The stepper's - and + are square *keys*: `Stepper.SIDE` makes the box
+    # square, this makes its corners round. Radius 5 is the concentric one —
+    # the panel's 11 less the 6px the keys sit inside it — so the two curves
+    # read as parallel. Corners are cut against SUNK because the panel, not a
+    # card, is what is behind them. The focus face is not decoration: a pill
+    # layout has no focus ring element, so without it a keyboard user would
+    # lose the cursor entirely.
+    _pill_style(st, p, scheme, "Step.TButton",
+                ((None, _rgb(p.CARD), None),
+                 ("focus", _rgb(p.CARD), p.TEAL_RGB)),
+                fonts.ui_bold, (1, 0), radius=5, bg=_rgb(p.SUNK))
+    st.configure("Step.TButton", foreground=p.SLATE)
+    st.map("Step.TButton", foreground=[("disabled", p.SLATE_2),
+                                       ("active", p.TEAL_DEEP)])
     _flat(st, p, "TButton", p.CARD, p.PINE, p.WHITE, p.TEAL_DEEP, p.LINE, fonts.ui)
 
 
@@ -449,6 +524,49 @@ def _icon_style(st: ttk.Style, scheme: str, name: str, faces: tuple,
     st.layout(name, [(element, {"sticky": "nsew", "children": [
         ("Button.label", {"sticky": "nsew"})]})])
     st.configure(name, anchor="center", width=0, padding=0)
+
+
+CHIP_HEIGHT = 30        # the title bar's chip height; `StatusPill` matches it
+
+
+def _chip_style(st: ttk.Style, p: Palette, scheme: str, fonts: Fonts,
+                name: str) -> None:
+    """A capsule button the size and shape of the title-bar status chip.
+
+    `_pill_style` cannot make this shape. Its 9-patch reserves `border` pixels
+    on all four sides *as padding*, so a capsule's radius of 15 would force a
+    46px-tall button. Here the border is asymmetric — (15, 0, 15, 0) — so the
+    two semicircular caps are protected while the flat middle stretches to the
+    label. Nothing stretches vertically: the padding is derived from the font's
+    linespace so the button lands on `CHIP_HEIGHT` exactly, and a stretch by
+    zero is what keeps the caps circular rather than elliptical.
+    """
+    key, element = (scheme, name), "%s.%s.chip" % (name, scheme)
+    radius = CHIP_HEIGHT / 2.0
+    if key not in _pill_elements:
+        tint = _hex(_over(p.TEAL_RGB, _rgb(p.CARD), 0.10))
+        # `active` before `focus`: both can hold at once, and someone hovering
+        # is using a mouse, so hover is the feedback they are waiting on. The
+        # focus face has to exist at all because this layout, like every pill
+        # in here, has no focus-ring element of its own.
+        faces = ((None, p.WHITE, p.LINE), ("active", tint, p.TEAL),
+                 ("focus", p.WHITE, p.TEAL))
+        images = [(state, rounded_rect(CHIP_HEIGHT + 2, CHIP_HEIGHT, radius,
+                                       fill, edge, p.CARD))
+                  for state, fill, edge in faces]
+        _pill_images[key] = images
+        st.element_create(element, "image", images[0][1],
+                          *[(state, img) for state, img in images[1:]],
+                          border=(int(radius), 0, int(radius), 0), sticky="nsew")
+        _pill_elements.add(key)
+    st.layout(name, [(element, {"sticky": "nsew", "children": [
+        ("Button.padding", {"sticky": "nsew", "children": [
+            ("Button.label", {"sticky": "nsew"})]})]})])
+    line = tkfont.Font(font=fonts.small_bold).metrics("linespace")
+    st.configure(name, font=fonts.small_bold, anchor="center", width=0,
+                 foreground=p.PINE, background=p.CARD,
+                 padding=(0, max(0, (CHIP_HEIGHT - line) // 2)))
+    st.map(name, foreground=[("disabled", p.SLATE_2), ("active", p.TEAL_DEEP)])
 
 
 def _rgb(hex_colour: str) -> tuple:
@@ -733,7 +851,9 @@ class Raster:
 
     def ring(self, cx: float, cy: float, radius: float, width: float,
              frac: float, rgb: tuple) -> None:
-        """Stroke `frac` of a turn clockwise from 12 o'clock, with round caps.
+        """Stroke `frac` of a turn from 12 o'clock, with round caps.
+
+        Which way round is `_sweep`'s call, not this loop's.
 
         Only the annulus band is visited — a full-image scan would be ~7x the
         pixels for the same result.
@@ -858,6 +978,21 @@ def _disc_coverage(x: int, y: int, cx: float, cy: float, radius: float) -> float
     return hit / (SCALE * SCALE)
 
 
+def _sweep(dx: float, dy: float) -> float:
+    """Where (dx, dy) falls along the ring's sweep: 0 at 12 o'clock, growing
+    **anti-clockwise**.
+
+    The arc is anchored at 12 and drawn up to `frac`, so a draining session
+    walks its free end backwards — against the sweep. Growing the sweep
+    anti-clockwise therefore sends that moving end *clockwise*, left to right
+    across the top of the ring, which is the direction a clock hand and a
+    progress bar both move. The three places that need this angle share one
+    definition so the arc body, its anti-aliasing and its end caps cannot
+    disagree about which way round the ring goes.
+    """
+    return math.atan2(-dx, -dy) % TAU
+
+
 def _well_inside(dx: float, dy: float, d: float, end: float) -> bool:
     """True when a pixel is more than a pixel clear of both boundary rays.
 
@@ -866,7 +1001,7 @@ def _well_inside(dx: float, dy: float, d: float, end: float) -> bool:
     """
     if end >= TAU:
         return True
-    ang = math.atan2(dx, -dy) % TAU
+    ang = _sweep(dx, dy)
     if not 0.0 < ang < end:
         return False
     return d * min(ang, end - ang) > 1.0
@@ -878,7 +1013,7 @@ def _cap_centres(radius: float, half: float, frac: float) -> tuple:
         return ()
     end = frac * TAU
     return ((0.0, -radius),
-            (radius * math.sin(end), -radius * math.cos(end)))
+            (-radius * math.sin(end), -radius * math.cos(end)))
 
 
 def _arc_coverage(px: float, py: float, radius: float, half: float,
@@ -896,7 +1031,7 @@ def _arc_coverage(px: float, py: float, radius: float, half: float,
 def _in_arc(dx: float, dy: float, radius: float, half: float,
             frac: float, caps: tuple) -> bool:
     if abs(math.hypot(dx, dy) - radius) <= half:
-        if frac >= 1.0 or math.atan2(dx, -dy) % TAU <= frac * TAU:
+        if frac >= 1.0 or _sweep(dx, dy) <= frac * TAU:
             return True
     return any(math.hypot(dx - qx, dy - qy) <= half for qx, qy in caps)
 
@@ -955,8 +1090,9 @@ class RingArt:
 
     The GUI ticks at 1 Hz. Re-encoding a PNG every tick to advance the arc by
     a fraction of a pixel is pure waste, so the fraction is quantised into
-    STEPS buckets. Progress is monotonic, so a bucket is never revisited and
-    caching more than the current image would be waste of a second kind.
+    STEPS buckets. A session only ever drains, so the fraction is monotonic, a
+    bucket is never revisited, and caching more than the current image would be
+    waste of a second kind.
     """
 
     STEPS = 120
@@ -967,6 +1103,11 @@ class RingArt:
         self._image = None
         self._base_key = None
         self._base = None
+
+    @property
+    def inner_radius(self) -> float:
+        """Clear radius inside the stroke — what the countdown has to fit in."""
+        return self.size / 2.0 - self.stroke - 2
 
     def key(self, frac: float, locked: bool, origin: tuple) -> tuple:
         bucket = max(0, min(self.STEPS, int(round(frac * self.STEPS))))

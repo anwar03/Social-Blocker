@@ -41,6 +41,20 @@ def _countdown(secs: int) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
+def _nudge_minutes(variable: tk.StringVar, delta: int, fallback: int) -> None:
+    """Step a duration field, keeping it a number and never below one block.
+
+    Shared by the two duration steppers: a half-typed or empty field must not
+    turn a button press into a traceback, and both fields agree that 5 min is
+    the shortest block worth arming.
+    """
+    try:
+        current = int(variable.get())
+    except ValueError:
+        current = fallback
+    variable.set(str(max(5, current + delta)))
+
+
 def _needs_pkexec() -> bool:
     """True when this process cannot write the hosts file itself."""
     return os.geteuid() != 0 and str(config.HOSTS_FILE) == "/etc/hosts"
@@ -139,9 +153,11 @@ def section_label(parent, text, fonts):
 class PresetCard(ttk.Frame):
     """One preset as a whole-card button: name, then its settings as data.
 
-    The metadata line is monospace on purpose — "50m · whitelist · locked" is
-    three fields, not a sentence, and a fixed pitch makes three cards side by
-    side scan as a table.
+    The settings are one dot-joined monospace line in one grey, not a row of
+    differently-weighted fields. A preset is a *starting point* the composer
+    then lets you change, so nothing in it deserves to shout: read as a single
+    quiet caption, three cards side by side scan as one set instead of three
+    competing ones, and the mono face lands the "·" on the same column in each.
     """
 
     def __init__(self, parent, preset, fonts, command):
@@ -151,17 +167,22 @@ class PresetCard(ttk.Frame):
                         background=mk.theme.CARD, foreground=mk.theme.PINE,
                         font=fonts.ui_bold)
         name.pack(fill="x")
-        bits = [f"{preset.get('default_minutes', '?')}m", preset.get("mode", "")]
-        if preset.get("locked"):
-            bits.append("locked")
-        meta = tk.Label(self, text=" · ".join(b for b in bits if b), anchor="w",
-                        background=mk.theme.CARD, foreground=mk.theme.SLATE,
-                        font=fonts.mono_small)
-        meta.pack(fill="x", pady=(5, 0))
-        for widget in (self, name, meta):
+        for widget in (self, name) + self._build_meta(preset, fonts):
             widget.bind("<Button-1>", self._click)
             widget.bind("<Enter>", lambda _e: self._hover(True))
             widget.bind("<Leave>", lambda _e: self._hover(False))
+
+    def _build_meta(self, preset: dict, fonts) -> tuple:
+        """The settings line. Returns every widget in it: the whole card is one
+        button, so anything drawn on it has to carry the same binds."""
+        fields = [f"{preset.get('default_minutes', '?')}m", preset.get("mode", "")]
+        if preset.get("locked"):
+            fields.append("locked")
+        meta = tk.Label(self, text=" · ".join(f for f in fields if f), anchor="w",
+                        background=mk.theme.CARD, foreground=mk.theme.SLATE,
+                        font=fonts.mono_small)
+        meta.pack(fill="x", pady=(6, 0))
+        return (meta,)
 
     def _hover(self, on: bool) -> None:
         # A ttk.Frame has no widget states, so the whole style is swapped —
@@ -173,15 +194,20 @@ class PresetCard(ttk.Frame):
 
 
 class Composer(ttk.Frame):
-    """The focus-session composer: duration, mode, lock, Start.
+    """The focus-session composer: duration, mode, lock, and the one button
+    that both starts and stops a session.
 
     Owns its own input state and turns it into exactly one use-case call.
-    `run` is the caller's elevate-and-apply helper.
+    `run` is the caller's elevate-and-apply helper; `stop` is the caller's
+    stop handler, injected rather than rebuilt so the boot-block follow-up
+    message lives in one place.
     """
 
-    def __init__(self, parent, fonts, run):
+    LOCKED_TEXT = "Locked until the timer ends"
+
+    def __init__(self, parent, fonts, run, stop):
         super().__init__(parent, style=mk.CARD_STYLE, padding=16)
-        self._run = run
+        self._run, self._stop = run, stop
         self.minutes = tk.StringVar(value="90")
         self.mode = tk.StringVar(value=WHITELIST)
         self.locked = tk.BooleanVar(value=False)
@@ -189,24 +215,48 @@ class Composer(ttk.Frame):
 
         row = tk.Frame(self, background=mk.theme.CARD)
         row.pack(fill="x", pady=(0, 14))
-        Stepper(row, self.minutes, self._nudge, fonts).pack(side="left")
+        # The stepper keeps the width its contents need; the pills take the
+        # rest, so the row ends flush with the Start button below it.
+        row.columnconfigure(1, weight=1)
+        Stepper(row, self.minutes, self._nudge, fonts).grid(row=0, column=0)
+        # The stepper measures its own height; the pills take that number
+        # rather than arriving at their own from font plus padding, so the two
+        # halves of the row stay the same height on any font.
         self.pills = PillGroup(row, ((WHITELIST, "Whitelist"),
-                                     (BLACKLIST, "Blacklist")), self.set_mode)
-        self.pills.pack(side="left", padx=(10, 0))
+                                     (BLACKLIST, "Blacklist")), self.set_mode,
+                               stretch=True, height=Stepper.HEIGHT)
+        self.pills.grid(row=0, column=1, sticky="ew", padx=(10, 0))
         self.pills.select(WHITELIST)
 
         ttk.Checkbutton(self, text="Lock session (can't stop early)",
                         variable=self.locked, style="Card.TCheckbutton"
                         ).pack(anchor="w", pady=(0, 14))
-        ttk.Button(self, text="Start focus", style="Primary.TButton",
-                   command=self.start).pack(fill="x")
+        self.action = ttk.Button(self, text="Start focus",
+                                 style="Primary.TButton", command=self.start)
+        self.action.pack(fill="x")
+
+    def render(self, st: dict) -> None:
+        """Start and Stop are the same button, because they are the same slot
+        in the user's head: "act on the session". The label always names what
+        pressing it will do, which is the only rule a toggle has to obey.
+
+        While a session is locked the button is disabled — `st["locked"]` comes
+        from `control.status()`, so this is the front-end *displaying* the lock,
+        not deciding it. `control.stop_session` is still the thing that refuses.
+        """
+        active, locked = st["session_active"], st["locked"]
+        if active and locked:
+            self.action.configure(text=self.LOCKED_TEXT, style="Danger.TButton",
+                                  command=lambda: None, state="disabled")
+        elif active:
+            self.action.configure(text="Stop focus", style="Danger.TButton",
+                                  command=self._stop, state="normal")
+        else:
+            self.action.configure(text="Start focus", style="Primary.TButton",
+                                  command=self.start, state="normal")
 
     def _nudge(self, delta: int) -> None:
-        try:
-            current = int(self.minutes.get())
-        except ValueError:
-            current = 90
-        self.minutes.set(str(max(5, current + delta)))
+        _nudge_minutes(self.minutes, delta, fallback=90)
 
     def set_mode(self, mode: str) -> None:
         self.mode.set(mode)
@@ -245,6 +295,7 @@ class ListPanel(ttk.Frame):
     """
 
     PLACEHOLDER = "add a domain…"
+    MIN_ROWS = 3        # the list is elastic; this is only its floor
 
     def __init__(self, parent, fonts, run, refresh):
         super().__init__(parent, style=mk.CARD_STYLE, padding=16)
@@ -253,7 +304,12 @@ class ListPanel(ttk.Frame):
         self.tabs = TabStrip(self, (("block", "Blacklist"), ("allow", "Whitelist")),
                              self.show, fonts)
         self.tabs.pack(fill="x", pady=(0, 4))
-        self.rows = DomainList(self, fonts, height=8)
+        # Asking for the rows we want would make this card the taller of the
+        # two body columns and leave dead space under the other one. So the
+        # card asks for almost nothing and the rows take whatever the row
+        # height turns out to be: the left column decides how tall the body
+        # is, and the list is what absorbs the difference.
+        self.rows = DomainList(self, fonts, height=self.MIN_ROWS)
         self.rows.pack(fill="both", expand=True)
         self._build_controls(fonts)
         self.tabs.select(self.which)
@@ -329,16 +385,27 @@ class ListPanel(ttk.Frame):
 class Hero(tk.Canvas):
     """The status hero: fog field, headline, and the countdown ring.
 
-    A single canvas because Tk cannot stack widgets over a background image —
-    text and the live buttons are canvas items placed on the generated art.
+    A single canvas because Tk cannot stack widgets over a background image:
+    every piece of it is a canvas item drawn on the generated art. It is a
+    read-out only — the actions that used to sit here moved to the composer
+    (start/stop) and the title bar (extend).
     """
 
-    HEIGHT = 186
     RING = 128
     PAD = 26
-    RADIUS = 8          # at half-resolution, so 16px once zoomed back up
+    # The ring is the tallest thing in here, so the card is exactly as tall as
+    # the ring plus its margins. Written as the sum so it cannot drift from
+    # `PAD` the way a hand-set 186 already had.
+    HEIGHT = RING + 2 * PAD
+    VALUE_DY = -8       # the numeral rides above centre, its cap label below
+    CAP_DY = 18
+    # Derived, not hand-set: the hero must land on the same curve as every card
+    # below it, and two independently written numbers drift apart. The field is
+    # rastered at half resolution and zoomed back up, so the cut is made at half
+    # the card radius.
+    RADIUS = mk.CARD_RADIUS / 2.0
 
-    def __init__(self, parent, fonts, on_extend, on_stop):
+    def __init__(self, parent, fonts):
         super().__init__(parent, height=self.HEIGHT, background=mk.theme.SUNK,
                          highlightthickness=0, bd=0)
         self.fonts = fonts
@@ -350,10 +417,10 @@ class Hero(tk.Canvas):
         self._width = 0
         self._resize_job = None
         self._st = None
-        self._build(on_extend, on_stop)
+        self._build()
         self.bind("<Configure>", self._reflow)
 
-    def _build(self, on_extend, on_stop) -> None:
+    def _build(self) -> None:
         f, pad = self.fonts, self.PAD
         self.create_image(0, 0, anchor="nw", image=self._bg_photo, tags="bg")
         self._eyebrow = self.create_text(pad, 28, anchor="w", fill=mk.theme.SLATE,
@@ -366,13 +433,6 @@ class Hero(tk.Canvas):
         self._ring = self.create_image(0, 0, anchor="nw")
         self._value = self.create_text(0, 0, fill=mk.theme.PINE, font=f.ring)
         self._cap = self.create_text(0, 0, fill=mk.theme.SLATE, font=f.eyebrow)
-        self._extend_btn = ttk.Button(self, text="+15 min", style="Ghost.TButton",
-                                      command=on_extend)
-        self._stop_btn = ttk.Button(self, text="Stop", style="Danger.TButton",
-                                    command=on_stop)
-        self._extend = self.create_window(pad, 150, anchor="w",
-                                          window=self._extend_btn)
-        self._stop = self.create_window(pad, 150, anchor="w", window=self._stop_btn)
 
     def _reflow(self, event=None) -> None:
         """Right-align the ring and keep the fog matched to the real width.
@@ -396,12 +456,10 @@ class Hero(tk.Canvas):
         y = (self.HEIGHT - self.RING) // 2
         self._origin = (x, y)
         self.coords(self._ring, x, y)
-        self.coords(self._value, x + self.RING / 2, y + self.RING / 2 - 8)
-        self.coords(self._cap, x + self.RING / 2, y + self.RING / 2 + 18)
+        self.coords(self._value, x + self.RING / 2,
+                    y + self.RING / 2 + self.VALUE_DY)
+        self.coords(self._cap, x + self.RING / 2, y + self.RING / 2 + self.CAP_DY)
         self.itemconfigure(self._sub, width=max(200, x - self.PAD - 24))
-        # Measured, not guessed: the button's width depends on the resolved
-        # font, so a hard-coded offset collides on some systems.
-        self.coords(self._stop, self.PAD + self._extend_btn.winfo_reqwidth() + 10, 150)
 
     def _repaint_field(self) -> None:
         """Re-render the fog at the current width, with rounded corners.
@@ -429,9 +487,6 @@ class Hero(tk.Canvas):
         self.itemconfigure(self._sub, text=sub)
         self._place_lock(eyebrow, st["locked"])
         self._render_ring(st)
-        live = "normal" if st["session_active"] else "hidden"
-        self.itemconfigure(self._extend, state=live)
-        self.itemconfigure(self._stop, state=live)
 
     def _place_lock(self, eyebrow: str, locked: bool) -> None:
         if not locked:
@@ -441,17 +496,35 @@ class Hero(tk.Canvas):
         self.coords(self._lock, self.bbox(self._eyebrow)[2] + 14, 28)
 
     def _render_ring(self, st: dict) -> None:
+        """The teal arc is the time that is *left*, so the ring drains.
+
+        Filling it with elapsed time answered "how long have I been at this?";
+        filling it with the remainder answers "how much is left?", which is the
+        question the numeral in the middle is already answering. Both should
+        shrink together.
+        """
         total = st["session_total"]
-        frac = 1.0 - st["session_remaining"] / total if total > 0 else 0.0
+        frac = st["session_remaining"] / total if total > 0 else 0.0
         key = self._art.key(frac, st["locked"], self._origin)
         self._ring_photo = self._art.image(key)
         self.itemconfigure(self._ring, image=self._ring_photo)
         if st["session_active"]:
-            self.itemconfigure(self._value, text=_countdown(st["session_remaining"]))
-            self.itemconfigure(self._cap, text=mk.track("LEFT"))
+            self._set_value(_countdown(st["session_remaining"]), "LEFT")
         else:
-            self.itemconfigure(self._value, text=str(st["blocked_now"]))
-            self.itemconfigure(self._cap, text=mk.track("BLOCKED"))
+            self._set_value(str(st["blocked_now"]), "BLOCKED")
+
+    def _set_value(self, value: str, cap: str) -> None:
+        """Write the ring's numeral at the largest size that stays inside it.
+
+        A 5-hour session reads "4:59:14" — 105px in the display face at its
+        full size, against 91px of clear width on the numeral's line — so one
+        fixed size runs the digits into the stroke. Fitting per string means
+        short sessions still get the full-size numeral.
+        """
+        font = mk.fit_in_circle(self.fonts.ring, value,
+                                self._art.inner_radius, self.VALUE_DY)
+        self.itemconfigure(self._value, text=value, font=font)
+        self.itemconfigure(self._cap, text=mk.track(cap))
 
 
 class StartupPanel(ttk.Frame):
@@ -477,9 +550,10 @@ class StartupPanel(ttk.Frame):
         row.pack(fill="x")
         ttk.Checkbutton(row, text="Block at every boot for", variable=self.enabled,
                         style="Card.TCheckbutton").pack(side="left")
-        ttk.Entry(row, textvariable=self.minutes, width=5,
-                  justify="center").pack(side="left", padx=6)
-        ttk.Label(row, text="min", style="Muted.Card.TLabel").pack(side="left")
+        # The same stepper the composer uses: a boot block and a focus session
+        # are the same quantity, so they get the same control rather than a
+        # bare entry the user has to know is typeable.
+        Stepper(row, self.minutes, self._nudge, fonts).pack(side="left", padx=(10, 0))
         ttk.Button(row, text="Save", style="Primary.TButton",
                    command=self._save).pack(side="right")
 
@@ -501,6 +575,9 @@ class StartupPanel(ttk.Frame):
         ttk.Checkbutton(row3, text="Open this app at login", variable=self.gui_auto,
                         style="Card.TCheckbutton",
                         command=self._toggle_gui).pack(side="right")
+
+    def _nudge(self, delta: int) -> None:
+        _nudge_minutes(self.minutes, delta, fallback=300)
 
     def _save(self) -> None:
         try:
@@ -637,20 +714,20 @@ class App(tk.Tk):
         tk.Label(bar, text="Blocker", background=mk.theme.CARD,
                  foreground=mk.theme.TEAL_DEEP,
                  font=self.fonts.mark).pack(side="left")
-        # Icon-only: the mark, the wordmark and the status chip already fill
-        # this bar, and "Refresh" is the one action here — a label adds width
-        # without adding meaning.
-        self._reload = mk.reload_icon(15, mk.theme.PINE)
-        refresh = ttk.Button(bar, image=self._reload, style="Icon.TButton",
-                             command=self._refresh)
-        refresh.pack(side="right")
+        # Extending is a global action on the running session, not part of the
+        # hero's read-out, so it belongs up here next to the status chip.
+        # It wears the chip's capsule so the two things in this bar read as one
+        # set — see `mistkit._chip_style` for why that shape needs its own
+        # element. (Refresh is not duplicated here: the list card offers it.)
+        self.extend_btn = ttk.Button(bar, text="+15 min", style="Chip.TButton",
+                                     command=lambda: self._extend(15))
+        self.extend_btn.pack(side="right")
         self.pill = StatusPill(bar, self.fonts)
         self.pill.pack(side="right", padx=12)
 
     def _build_body(self, parent) -> None:
         parent.configure(padx=18, pady=16)
-        self.hero = Hero(parent, self.fonts, lambda: self._extend(15),
-                         self._stop_focus)
+        self.hero = Hero(parent, self.fonts)
         self.hero.pack(fill="x")
         self._build_presets(parent)
 
@@ -661,7 +738,7 @@ class App(tk.Tk):
         left = tk.Frame(columns, background=mk.theme.SUNK)
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
         self._build_mode_card(left)
-        self.composer = Composer(left, self.fonts, self._do)
+        self.composer = Composer(left, self.fonts, self._do, self._stop_focus)
         self.composer.pack(fill="x", pady=(14, 0))
         self.lists = ListPanel(columns, self.fonts, self._do, self._refresh)
         self.lists.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
@@ -693,7 +770,8 @@ class App(tk.Tk):
         card_label(card, "All-day default mode")
         self.mode_pills = PillGroup(card, ((BLACKLIST, "Blacklist"),
                                            (WHITELIST, "Whitelist"),
-                                           (OFF, "Off")), self._set_mode)
+                                           (OFF, "Off")), self._set_mode,
+                                    stretch=True)
         self.mode_pills.pack(fill="x")
         self.mode_desc = tk.StringVar(value="")
         ttk.Label(card, textvariable=self.mode_desc, style="Muted.Card.TLabel",
@@ -774,6 +852,11 @@ class App(tk.Tk):
     def _render_status(self, st: dict) -> None:
         self.pill.render(*_pill_state(st))
         self.hero.render(st)
+        self.composer.render(st)
+        # Nothing to extend without a session; disabled rather than hidden, so
+        # the bar keeps its width instead of jumping when a session starts.
+        self.extend_btn.configure(
+            state="normal" if st["session_active"] else "disabled")
         self.mode_pills.select(st["default_mode"])
         self.mode_desc.set(MODE_DESC.get(st["default_mode"], ""))
 
