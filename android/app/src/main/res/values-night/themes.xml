@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Ink — the dark sibling of the same design language. -->
+    <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/fog_top</item>
+        <item name="android:colorAccent">@color/teal</item>
+        <item name="android:statusBarColor">@color/fog_top</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

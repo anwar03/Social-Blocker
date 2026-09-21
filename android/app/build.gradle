@@ -1,0 +1,52 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'org.socialblocker'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'org.socialblocker'
+        // API 26: java.time (LocalDate.toEpochDay is the exact analogue of the
+        // desktop's date.toordinal()) without pulling in core-library desugaring.
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    sourceSets {
+        main {
+            // SINGLE SOURCE OF TRUTH. The phone ships the very same
+            // data/*.json the desktop tool reads — not a copy that drifts.
+            assets.srcDirs += ['../../data']
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false     // zero deps, nothing to shrink; keeps stack traces honest
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = '17' }
+
+    testOptions { unitTests.returnDefaultValues = true }
+}
+
+dependencies {
+    // ZERO RUNTIME DEPENDENCIES — Android framework only. This mirrors the
+    // desktop tool's "standard library only" rule: no AndroidX, no Compose, no
+    // Material library. org.json and android.* ship with the OS.
+    //
+    // Test-only (never on the device): JUnit, plus the standalone org.json
+    // artifact because the JVM stub android.jar throws on every framework call.
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+}

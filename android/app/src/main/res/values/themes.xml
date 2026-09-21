@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Mist. The framework theme only sets the window chrome; every surface
+         colour is computed in Mist.kt so the palette has exactly one home. -->
+    <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/fog_top</item>
+        <item name="android:colorAccent">@color/teal</item>
+        <item name="android:statusBarColor">@color/fog_top</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

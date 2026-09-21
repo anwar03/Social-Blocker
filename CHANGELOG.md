@@ -2,6 +2,55 @@
 
 All notable changes to SocialBlocker. Newest first.
 
+## 2026-09-21 — SocialBlocker for Android: the same tool, a different enforcement point
+
+- **New `android/` module** — full feature parity with the desktop tool
+  (off/blacklist/whitelist, focus sessions, locked sessions, schedules,
+  arm-at-boot, focus log + streak, presets, list editing, a 5 s re-apply loop).
+  Kotlin, **zero runtime dependencies**: no AndroidX, no Compose, no Material
+  library — the Android analogue of the project's standard-library-only rule.
+- **Enforcement is a local `VpnService` DNS sinkhole, not a hosts file.** A
+  phone has no writable `/etc/hosts`, so the service advertises a fake resolver
+  and answers blocked names with `A 0.0.0.0` (60 s TTL); everything else is
+  forwarded to the real resolver untouched.
+- **Why DNS-only routing:** the tunnel `addRoute`s just the fake resolver's
+  `/32`, so only DNS packets enter our process. A default route would have meant
+  writing a userspace TCP/IP stack and passing every byte the phone sends
+  through Kotlin. Same philosophy as the desktop — intercept *name resolution*,
+  not traffic.
+- **Suffix matching instead of variant enumeration.** A hosts file has no
+  wildcards, so `hosts_engine._variants()` spells out `www.` and `m.`. DNS sees
+  the query name, so one rule (`instagram.com`) covers `i.instagram.com` and
+  `graph.instagram.com` — which is what makes the *app* blocked and not merely
+  the website. O(labels in the query), not O(rules).
+- **Blocked answer is `0.0.0.0`, never NXDOMAIN.** Apps read NXDOMAIN as a
+  network fault and retry in a loop: battery drain that looks like a bug.
+  Non-A queries get an empty NOERROR for the same reason.
+- **The dependency rule is preserved verbatim:**
+  `ui/ · vpn/ · platform/ → core/Control.kt → core/BlockEngine.kt →
+  core/Config.kt`. `core/` has no Android imports at all, which is what lets the
+  entire policy layer run as JVM unit tests with no emulator. `Config.kt`
+  imports nothing from the package, exactly like `config.py`.
+- **`ListSource` and `Enforcer` are the port** that `SOCIALBLOCKER_HOME` /
+  `SOCIALBLOCKER_HOSTS` are on the desktop: the seam tests substitute.
+  `CoreTest` runs against this repo's real `data/*.json` through `ListSource`.
+- **Gradle points `assets.srcDirs` at `../../data`** — the phone ships the very
+  same JSON the desktop reads, so the two can never drift. The state file uses
+  the same JSON keys (`ends_at`, `last_boot_id`, `focus_log`).
+- **Mutations are `@Synchronized` in `Control`,** unlike the desktop. CLI, GUI
+  and daemon are separate processes reconciled by an atomic rename; on Android
+  the UI thread, the policy loop and the notification receiver are threads in
+  one process sharing one `State` object.
+- **No `boot_id` on Android,** so the token is derived as
+  `wall-clock now − elapsedRealtime` rounded to the minute, with a
+  30-minutes-since-boot guard and a fail-safe `""` that `armBootSession` already
+  treats as "do not arm". A crash-restart can never re-arm a block you stopped.
+- **Not built or run.** This machine has no JDK, Gradle or Android SDK
+  (`java: command not found`, no `ANDROID_HOME`), so nothing was compiled. The
+  packet arithmetic, the suffix matcher and the `data/*.json` shape were
+  verified instead by porting them to Python and testing independently: both
+  checksums fold to 0, and the six malformed-packet rejections hold.
+
 ## 2026-08-17 — The composer's mode pills take the stepper's height
 
 - **`PillGroup` gained `height=`**, and the composer passes `Stepper.HEIGHT`.

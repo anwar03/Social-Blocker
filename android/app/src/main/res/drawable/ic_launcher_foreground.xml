@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-icon foreground. The 108dp canvas keeps the art inside the
+     safe 66dp circle so no launcher mask clips the shield. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:scaleX="1.8" android:scaleY="1.8"
+        android:translateX="32.4" android:translateY="32.4">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M12,2L4,5v6c0,5 3.4,9.7 8,11c4.6,-1.3 8,-6 8,-11V5L12,2zM12,4.2l6,2.2v4.6c0,4 -2.5,7.7 -6,8.9c-3.5,-1.2 -6,-4.9 -6,-8.9V6.4L12,4.2z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M8.5,11.2l-1.4,1.4L11,16.5l6,-6l-1.4,-1.4L11,13.7z" />
+    </group>
+</vector>

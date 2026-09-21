@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Forwarding the DNS queries we do NOT block needs a real socket out. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- The enforcement service is the phone's daemon: it must outlive the UI. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Autostart: arm the configured block once per boot. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Android 13+: the persistent "what is blocked right now" notification. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application
+        android:name=".platform.App"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="SocialBlocker"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:label="SocialBlocker"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".ui.ListsActivity"
+            android:exported="false"
+            android:label="Lists"
+            android:parentActivityName=".ui.MainActivity" />
+
+        <activity
+            android:name=".ui.ScheduleActivity"
+            android:exported="false"
+            android:label="Schedules"
+            android:parentActivityName=".ui.MainActivity" />
+
+        <!-- The enforcement engine. BIND_VPN_SERVICE is what makes Android
+             hand us the tun fd; only the system may bind it. -->
+        <service
+            android:name=".vpn.BlockerVpnService"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Always-on DNS filtering for a user-configured focus block." />
+        </service>
+
+        <!-- Second, deliberately thin front-end (the CLI's role on the desktop):
+             a Quick Settings tile that calls the same Control use cases. -->
+        <service
+            android:name=".ui.BlockerTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_shield"
+            android:label="SocialBlocker"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <receiver
+            android:name=".platform.BootReceiver"
+            android:exported="true"
+            android:directBootAware="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Notification actions (extend / stop) route through Control so the
+             locked-mode check stays in exactly one place. -->
+        <receiver
+            android:name=".platform.ActionReceiver"
+            android:exported="false" />
+
+    </application>
+</manifest>

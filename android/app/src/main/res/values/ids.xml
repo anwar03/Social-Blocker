@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- View.setTag(int, Object) throws unless the key is an application
+         resource id, so the switch-row tag is declared here. -->
+    <item name="sb_switch" type="id" />
+</resources>
